@@ -347,6 +347,28 @@ final class NetToysPresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testScannerPrefillUpdatesWindowModelBeforeScannerPageExists() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+        let model = NetToysScannerViewModel(archive: NetToysScanArchive(runs: []), host: testHost(defaults))
+
+        model.applyPrefill(NetToysScanPrefill(targets: "10.0.0.8", ports: "8080"))
+        let network = try XCTUnwrap(LocalIPv4Network(
+            interfaceName: "en0", address: "192.168.2.10", netmask: "255.255.255.0"
+        ))
+        model.updateActiveNetwork(network)
+        XCTAssertEqual(model.targetInput, "10.0.0.8")
+        XCTAssertEqual(model.portInput, "8080")
+        XCTAssertFalse(model.isScanning)
+
+        model.applyPrefill(NetToysScanPrefill(targets: "10.0.0.9", ports: nil))
+        model.applyPrefill(nil)
+        XCTAssertEqual(model.targetInput, "10.0.0.9")
+        XCTAssertEqual(model.portInput, "8080")
+    }
+
+    @MainActor
     func testScannerViewModelMergesLiveRescanWithoutDroppingOtherHosts() throws {
         let first = NetToysScanResult(
             address: try XCTUnwrap(IPv4Address("192.168.1.10")),

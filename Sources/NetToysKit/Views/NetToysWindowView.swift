@@ -147,7 +147,8 @@ public struct NetToysWindowView: View {
                 NotificationCenter.default.post(name: .netToysStartScan, object: run)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .netToysPrefill)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .netToysPrefill)) { notification in
+            scannerModel.applyPrefill(consumePrefill() ?? (notification.object as? NetToysScanPrefill))
             page = .scanner
         }
         .onReceive(NotificationCenter.default.publisher(for: .netToysOpenAnchor)) { notification in
@@ -163,10 +164,7 @@ public struct NetToysWindowView: View {
             page = requestedPage
         }
         .task {
-            if let prefill = consumePrefill() {
-                scannerModel.targetInput = prefill.targets
-                if let ports = prefill.ports { scannerModel.portInput = ports }
-            }
+            scannerModel.applyPrefill(consumePrefill())
             localNetworkAccess.request()
             await scannerModel.loadStoredState()
         }

@@ -225,6 +225,12 @@ final class NetToysScannerViewModel {
         total = results.count
     }
 
+    func applyPrefill(_ prefill: NetToysScanPrefill?) {
+        guard let prefill else { return }
+        targetInput = prefill.targets
+        if let ports = prefill.ports { portInput = ports }
+    }
+
     func loadStoredState() async {
         guard isLoading else { return }
         let (archive, annotations, favorites) = await Task.detached(priority: .utility) {
@@ -818,9 +824,6 @@ struct NetToysScannerView: View {
             model.portInput = run.ports.map(String.init).joined(separator: ", ")
             model.start()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .netToysPrefill)) { notification in
-            applyPrefill(notification.object as? NetToysScanPrefill)
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             neighborService.refresh()
             Task { await refreshNetworkContext() }
@@ -893,12 +896,6 @@ struct NetToysScannerView: View {
             }
         }
         .accessibilityLabel(model.isImporting ? "Importing scan file" : "More scan options")
-    }
-
-    private func applyPrefill(_ prefill: NetToysScanPrefill?) {
-        guard let prefill else { return }
-        model.targetInput = prefill.targets
-        if let ports = prefill.ports { model.portInput = ports }
     }
 
     private var resultFilterChoices: [(NetToysResultFilter, String)] {
