@@ -12,7 +12,7 @@ let package = Package(
         .executable(name: "NetToysHelper", targets: ["NetToysHelper"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/surajmandalcell/oneplus-ui.git", exact: "1.0.1"),
+        .package(url: "https://github.com/surajmandalcell/oneplus-ui.git", exact: "1.0.2"),
     ],
     targets: [
         .target(name: "NetToysCore", resources: [.process("Resources")]),
