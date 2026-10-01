@@ -805,6 +805,7 @@ public struct NetToysSettingsView: View {
                     }
                 }
             }
+            .buttonStyle(OnePlusButtonStyle(.neutral))
             OnePlusSettingRow("Network history", help: "Remove saved uptime, transition, and IP scan records from this Mac.", separator: false) {
                 Button("Clear History", role: .destructive) { confirmClear = true }
                     .buttonStyle(OnePlusButtonStyle(.destructive))
