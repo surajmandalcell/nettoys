@@ -272,6 +272,15 @@ final class NetToysScannerViewModel {
         !isScanning && !results.isEmpty && aliveResultCount == 0
     }
 
+    var scanResultNotice: String? {
+        guard !isScanning, !results.isEmpty, let lastScanTarget else { return nil }
+        if lastScanTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+            != targetInput.trimmingCharacters(in: .whitespacesAndNewlines) {
+            return "Results are from \(lastScanTarget). Scan to refresh."
+        }
+        return hasNoResponsiveHosts ? "No hosts responded. Check the target and scan again." : nil
+    }
+
     func useActiveNetwork(_ cidr: String) {
         isApplyingActiveNetwork = true
         targetInput = cidr
@@ -792,10 +801,6 @@ struct NetToysScannerView: View {
                     }
                 }
             }
-            if model.hasNoResponsiveHosts && !model.visibleResults.isEmpty {
-                OnePlusBanner("No hosts responded. Check that the target matches the current network, then scan again.",
-                              tone: .warning) {}
-            }
             resultControls
             OnePlusCard {
                 resultsTable.frame(maxHeight: .infinity)
@@ -866,6 +871,12 @@ struct NetToysScannerView: View {
                     .buttonStyle(OnePlusButtonStyle(.primary))
                     .keyboardShortcut(.return, modifiers: [])
                     .disabled(model.isImporting)
+            }
+            if let notice = model.scanResultNotice {
+                Text(notice)
+                    .onePlusText(.caption)
+                    .lineLimit(1)
+                    .help(notice)
             }
         }
     }
@@ -1194,14 +1205,11 @@ struct NetToysScannerView: View {
         .overlay {
             if model.visibleResults.isEmpty && !model.isScanning {
                 OnePlusEmptyState(
-                    model.results.isEmpty ? "Ready to scan"
-                        : model.hasNoResponsiveHosts ? "No hosts responded" : "No matching hosts",
+                    model.results.isEmpty ? "Ready to scan" : "No matching hosts",
                     systemImage: "network",
                     caption: model.results.isEmpty
                         ? "Enter targets and ports, then press Return to scan."
-                        : model.hasNoResponsiveHosts
-                            ? "Check that the target matches the current network, then scan again."
-                            : "Change the filter or search to show more results."
+                        : "Change the filter or search to show more results."
                 )
             }
         }

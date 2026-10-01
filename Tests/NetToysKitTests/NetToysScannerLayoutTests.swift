@@ -157,6 +157,51 @@ final class NetToysScannerLayoutTests: XCTestCase {
         XCTAssertEqual(restored.targetInput, "10.0.0.8")
     }
 
+    func testScannerNoticeDistinguishesStaleResultsFromCurrentAllDownScan() throws {
+        let suite = "NetToysScannerLayoutTests.notice.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let down = NetToysScanResult(
+            address: try XCTUnwrap(IPv4Address("192.168.0.1")), isReachable: false,
+            responseMilliseconds: nil, hostname: nil, macAddress: nil, vendor: nil, openPorts: []
+        )
+        let run = NetToysScanRun(
+            target: "192.168.0.255/24", ports: [22], duration: 11.8, results: [down]
+        )
+        let model = NetToysScannerViewModel(
+            archive: NetToysScanArchive(runs: [run]), defaults: defaults, host: testHost(defaults)
+        )
+        let network = try XCTUnwrap(LocalIPv4Network(
+            interfaceName: "en0", address: "192.168.1.23", netmask: "255.255.255.0"
+        ))
+        model.updateActiveNetwork(network)
+
+        let staleNotice = "Results are from 192.168.0.255/24. Scan to refresh."
+        XCTAssertEqual(model.targetInput, "192.168.1.0/24")
+        XCTAssertEqual(model.scanResultNotice, staleNotice)
+        XCTAssertEqual(model.lastScanTarget, run.target)
+        XCTAssertEqual(model.lastDuration, run.duration)
+        XCTAssertEqual(model.results, run.results)
+        model.filter = .alive
+        XCTAssertTrue(model.visibleResults.isEmpty)
+        XCTAssertEqual(model.scanResultNotice, staleNotice)
+
+        model.targetInput = " \(run.target)\n"
+        XCTAssertEqual(model.scanResultNotice, "No hosts responded. Check the target and scan again.")
+        model.isScanning = true
+        XCTAssertNil(model.scanResultNotice)
+        model.isScanning = false
+
+        var reachable = down
+        reachable.isReachable = true
+        model.applyScanUpdate(reachable)
+        XCTAssertNil(model.scanResultNotice)
+        model.targetInput = network.cidr
+        XCTAssertEqual(model.scanResultNotice, staleNotice)
+        model.clearRestoredResults()
+        XCTAssertNil(model.scanResultNotice)
+    }
+
     func testDefaultScannerColumnsStayInsideFixedViewport() async throws {
         let suite = "NetToysScannerLayoutTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
