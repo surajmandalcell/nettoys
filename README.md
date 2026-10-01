@@ -1,14 +1,14 @@
 # NetToys
 
-NetToys will run as a standalone macOS app and as a MacPowerToys package.
-This phase 1 scaffold builds a native app shell. The working IP Scanner,
-SSH Anchor, Wi-Fi Priority, Network History, and helpers remain in
-MacPowerToys until the phase 2 move.
+NetToys runs as a standalone macOS app and as a MacPowerToys package.
+Both apps use the same IP Scanner, SSH Anchor, Wi-Fi Priority, Network
+History, settings, manual, and menu content.
 
 Requires macOS 15 or later and Swift 6.2 or later.
 
 ```sh
-swift build --product NetToys
+swift test --jobs 2
+swift build --product NetToys --jobs 2
 make build
 ```
 
@@ -20,16 +20,36 @@ identity for team `GF57JXJF5A`. This command does not install or launch the
 app. Public distribution needs a separate Developer ID and notarization
 step.
 
-The package exports `NetToysKit`; `Sources/NetToysApp` consumes it.
-`packaging/macos` holds the app metadata and entitlements. The shell has
-no background tasks, helper registration, network requests, or permission
-requests. It has no OnePlusUI dependency yet, so it builds independently
-before that package's first tag exists.
+The package exports `NetToysCore` and `NetToysKit`. The core has no
+SwiftUI dependency. The kit uses OnePlusUI 1.0.0 and exposes configured
+window, settings, and menu entry points. MacPowerToys retains its own
+routing, tool enablement, and fan daemon.
 
-Phase 2 adds `NetToysCore` for shared network code and helper runtime,
-moves the current UI into `NetToysKit`, and adds standalone helper targets.
-Both NetToys and MacPowerToys will use `surajmandalcell/oneplus-ui` at
-`1.0.0`; MacPowerToys will use a reviewed NetToys version tag. The
-orchestrator owns public repository creation, pushes, and tags.
+`make build` embeds the standalone login helper, neighbor-only daemon
+plist, resource bundles, approved icon, MIT license, and IEEE notice.
+Both app and helper carry their own full source revision and package
+version. The IEEE vendor registry has separate terms in its notice.
+
+Both hosts keep data at `~/Library/Application Support/MacPowerToys/NetToys`.
+One private lifetime lock allows one user monitor. Each host records its
+own monitoring request. Quitting preserves that request; disabling removes
+only that host's request. No requests stops monitoring. A separate store
+lock protects short atomic data updates. Shared scanner preferences use
+`com.surajmandal.nettoys.preferences`; app appearance, window position,
+table columns, and menu disclosures remain with each host.
+
+Allow Local Network access for scans and Location access for Wi-Fi names.
+Settings shows recovery actions. A signed compatible helper can serve both
+hosts. Take Over Helper asks the other running parent to release ownership;
+it never launches that parent. Upgrade the old MacPowerToys helper before
+standalone monitoring. A stale old heartbeat does not prove safe migration.
+
+The standalone URL scheme is `nettoys://open/<page>`. Page IDs are
+`scanner`, `ssh-anchor`, `wifi`, `history`, `settings`, and `how-to-use`.
+Scanner URLs accept bounded `targets` and `ports` query values.
+
+Tests use synthetic network/SSH files, defaults suites, and lock directories.
+Package tests render native tables offscreen. Signed helper, permission,
+handoff, and installed-app acceptance runs in an isolated macOS session.
 
 MIT licensed. Copyright 2026 Suraj Mandal.

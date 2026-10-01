@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+	<key>CFBundleDisplayName</key><string>NetToys Helper</string>
+	<key>CFBundleExecutable</key><string>NetToysHelper</string>
+	<key>CFBundleIdentifier</key><string>com.surajmandal.nettoys.helper</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>NetToysHelper</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>1.0.0</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>LSMinimumSystemVersion</key><string>15.0</string>
+	<key>LSUIElement</key><true/>
+	<key>NetToysSourceCommit</key><string>unknown</string>
+	<key>NetToysPackageVersion</key><string>1.0.0</string>
+	<key>NSLocalNetworkUsageDescription</key><string>NetToys Helper checks SSH hosts and network state on your local network.</string>
+	<key>NSLocationUsageDescription</key><string>NetToys Helper uses Location access to record Wi-Fi network names.</string>
+	<key>NSLocationWhenInUseUsageDescription</key><string>NetToys Helper uses Location access to record Wi-Fi network names.</string>
+	<key>NSBonjourServices</key><array><string>_macpowertoys-permission._tcp</string></array>
+</dict></plist>

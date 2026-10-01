@@ -15,7 +15,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSApplicationCategoryType</key>
@@ -28,5 +28,20 @@
 	<true/>
 	<key>NetToysSourceCommit</key>
 	<string>unknown</string>
+	<key>NetToysPackageVersion</key>
+	<string>1.0.0</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleURLTypes</key>
+	<array><dict><key>CFBundleURLName</key><string>NetToys routes</string>
+	<key>CFBundleURLSchemes</key><array><string>nettoys</string></array></dict></array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>NetToys scans devices and checks SSH hosts on your local network.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>NetToys uses Location access to show Wi-Fi network names in history.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>NetToys uses Location access to show Wi-Fi network names in history.</string>
+	<key>NSBonjourServices</key>
+	<array><string>_macpowertoys-permission._tcp</string></array>
 </dict>
 </plist>
