@@ -37,6 +37,10 @@ build:
 	plutil -replace NetToysSourceCommit -string "$(SOURCE_COMMIT)" "$(APP)/Contents/Info.plist"
 	plutil -replace NetToysSourceCommit -string "$(SOURCE_COMMIT)" "$(HELPER)/Contents/Info.plist"
 	@test "$(SOURCE_COMMIT)" = "$$(git rev-parse HEAD)" && test -z "$$(git status --porcelain)" || (echo "Source changed during the build. Build again from clean HEAD." >&2; exit 1)
+	@set -e; for bundle in "$(APP)/Contents/MacOS/"*.bundle "$(APP)/Contents/Resources/"*.bundle "$(HELPER)/Contents/MacOS/"*.bundle "$(HELPER)/Contents/Resources/"*.bundle; do \
+	  test -d "$$bundle" || continue; \
+	  codesign --force --timestamp=none --sign "$(SIGNING_IDENTITY)" "$$bundle"; \
+	done
 	codesign --force --options runtime --timestamp=none --entitlements "$(ENTITLEMENTS)" --sign "$(SIGNING_IDENTITY)" "$(HELPER)"
 	codesign --force --options runtime --timestamp=none --entitlements "$(ENTITLEMENTS)" --sign "$(SIGNING_IDENTITY)" "$(APP)"
 	$(MAKE) verify
