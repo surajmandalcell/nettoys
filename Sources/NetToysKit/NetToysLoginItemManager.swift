@@ -126,6 +126,8 @@ public final class NetToysLoginItemManager {
     private func legacyHostIsLockAware() -> Bool {
         let applications = NSRunningApplication.runningApplications(withBundleIdentifier: NetToysHostID.macPowerToys.helperIdentifier)
         let status = NetToysConfigurationStore.status()
+        // An old writer can pause longer than the heartbeat window.
+        if let status, status.version < NetToysBuild.statusSchemaVersion { return false }
         if !applications.isEmpty, !NetToysHelperIdentity.isCompatible(status) { return false }
         let url = URL(fileURLWithPath: "/Applications/MacPowerToys.app")
         guard FileManager.default.fileExists(atPath: url.path) else { return applications.isEmpty }

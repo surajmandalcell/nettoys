@@ -185,4 +185,15 @@ final class NetToysOwnershipTests: XCTestCase {
                                                verifyParent: signed))
         XCTAssertFalse(response.isValidRequest(for: .macPowerToys, verifyParent: signed))
     }
+
+    func testStandaloneRoutesKeepTheHostBoundsAndSchemeSeparate() throws {
+        let url = try XCTUnwrap(URL(string: "nettoys://open/scanner?targets=192.0.2.1&ports=22%2C80"))
+        XCTAssertEqual(NetToysScanPrefill.parse(url, schemes: ["nettoys"], toolPath: nil),
+                       .init(targets: "192.0.2.1", ports: "22,80"))
+        XCTAssertNil(NetToysScanPrefill.parse(url))
+        for query in ["targets=192.0.2.1&ports=0", "targets=2001%3Adb8%3A%3A1", "targets=" + String(repeating: "a", count: 8_193)] {
+            let invalid = try XCTUnwrap(URL(string: "nettoys://open/scanner?" + query))
+            XCTAssertNil(NetToysScanPrefill.parse(invalid, schemes: ["nettoys"], toolPath: nil))
+        }
+    }
 }

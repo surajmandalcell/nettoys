@@ -58,8 +58,8 @@ verify:
 	"$(HELPER)/Contents/MacOS/NetToysHelper" --verify-resources
 	@for bundle in "$(APP)" "$(HELPER)"; do \
 	  codesign -d --entitlements :- "$$bundle" > "$(BUILD_PATH)/signed-entitlements.plist" 2>/dev/null; \
-	  test "$$(plutil -extract com.apple.security.app-sandbox raw "$(BUILD_PATH)/signed-entitlements.plist")" = "false" || exit 1; \
-	  test "$$(plutil -extract com.apple.security.personal-information.location raw "$(BUILD_PATH)/signed-entitlements.plist")" = "true" || exit 1; \
+	  test "$$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$(BUILD_PATH)/signed-entitlements.plist")" = "false" || exit 1; \
+	  test "$$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.personal-information.location' "$(BUILD_PATH)/signed-entitlements.plist")" = "true" || exit 1; \
 	  if test "$(SIGNING_IDENTITY)" != "-"; then \
 	    codesign -d --verbose=4 "$$bundle" 2>&1 | /usr/bin/grep -q '^TeamIdentifier=GF57JXJF5A$$' || exit 1; \
 	  fi; \
