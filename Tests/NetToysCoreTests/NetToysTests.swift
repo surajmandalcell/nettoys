@@ -740,7 +740,7 @@ final class NetToysTests: XCTestCase {
         XCTAssertEqual(database.vendor(for: "00:11:22:33:44:55"), "Example Device Lab")
         XCTAssertEqual(database.vendor(for: "00:11:22:3f:44:55"), "Example Products")
         XCTAssertEqual(database.vendor(for: "00:11:22:af:44:55"), "Example Holdings")
-        XCTAssertNil(database.vendor(for: "02:11:22:33:44:55"))
+        XCTAssertEqual(database.vendor(for: "02:11:22:33:44:55"), "Private address")
         XCTAssertNil(database.vendor(for: "invalid"))
         XCTAssertEqual(
             MACVendorDatabase.bundled.vendor(for: "28:6f:b9:00:00:00"),
@@ -1041,6 +1041,13 @@ final class NetToysTests: XCTestCase {
         XCTAssertEqual(updated.map(\.isReachable), [true, true, false])
         XCTAssertEqual(updated.map(\.macAddress), ["14:C3:5E:29:31:1A", "4C:E6:C0:5E:14:48", nil])
         XCTAssertEqual(updated[0].openPorts, [80])
+    }
+
+    func testRandomizedMACIsLabeledPrivateAndInterfaceMACIsReadable() throws {
+        XCTAssertEqual(MACVendorDatabase.bundled.vendor(for: "4a:89:cf:d8:0f:9d"), "Private address")
+        XCTAssertEqual(MACVendorDatabase.bundled.vendor(for: "c4:c1:7d:b2:1f:c0"), "Apple, Inc.")
+        XCTAssertNil(ARPTable.interfaceMAC(named: "no-such-interface0"))
+        if let mac = ARPTable.interfaceMAC(named: "lo0") { XCTFail("loopback has no MAC: \(mac)") }
     }
 
     func testIdleDaemonExitsOnlyAfterItsLastConnectionCloses() throws {

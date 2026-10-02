@@ -1121,7 +1121,12 @@ package actor NetToysScanner {
             interfaceIndex: interfaceIndex,
             contract: neighborContract
         )
-        let (enriched, newlyAlive) = Self.applyNeighbors(scanned, macAddresses: arp)
+        var macAddresses = arp
+        // The neighbor table has no usable entry for this Mac's own address; read the interface.
+        if let activeNetwork, let ownMAC = ARPTable.interfaceMAC(named: activeNetwork.interfaceName) {
+            macAddresses[activeNetwork.address.description] = ownMAC
+        }
+        let (enriched, newlyAlive) = Self.applyNeighbors(scanned, macAddresses: macAddresses)
         let names = await Self.reverseNames(newlyAlive, server: localDNSServer)
         return enriched.map { result in
             var result = result
@@ -1527,6 +1532,28 @@ public nonisolated enum ARPTable {
             .filter { requested.contains($0.key) }
     }
 
+    static func interfaceMAC(named name: String) -> String? {
+        var pointer: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&pointer) == 0, let first = pointer else { return nil }
+        defer { freeifaddrs(pointer) }
+        var current: UnsafeMutablePointer<ifaddrs>? = first
+        while let item = current {
+            defer { current = item.pointee.ifa_next }
+            guard String(cString: item.pointee.ifa_name) == name,
+                  let address = item.pointee.ifa_addr, address.pointee.sa_family == UInt8(AF_LINK)
+            else { continue }
+            let raw = UnsafeRawPointer(address)
+            let link = raw.loadUnaligned(as: sockaddr_dl.self)
+            let dataOffset = MemoryLayout<sockaddr_dl>.offset(of: \.sdl_data) ?? 8
+            let start = dataOffset + Int(link.sdl_nlen)
+            guard link.sdl_alen == 6, start + 6 <= Int(link.sdl_len) else { return nil }
+            let octets = (0..<6).map { raw.load(fromByteOffset: start + $0, as: UInt8.self) }
+            guard octets.contains(where: { $0 != 0 }) else { return nil }
+            return octets.map { String(format: "%02x", $0) }.joined(separator: ":")
+        }
+        return nil
+    }
+
     public static func neighborCacheData() -> Data? {
         var mib = [CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_LLINFO]
         var size = 0
@@ -1719,9 +1746,10 @@ nonisolated struct MACVendorDatabase: Sendable {
         guard let macAddress else { return nil }
         let normalized = AnchorMatcher.normalizedMAC(macAddress)
         guard normalized.count == 12,
-              let firstOctet = UInt8(normalized.prefix(2), radix: 16),
-              firstOctet & 0x02 == 0
+              let firstOctet = UInt8(normalized.prefix(2), radix: 16)
         else { return nil }
+        // Phones and Macs use randomized, locally administered addresses on Wi-Fi.
+        guard firstOctet & 0x02 == 0 else { return "Private address" }
         let hexadecimal = normalized.uppercased()
         return vendors["36:\(hexadecimal.prefix(9))"]
             ?? vendors["28:\(hexadecimal.prefix(7))"]
