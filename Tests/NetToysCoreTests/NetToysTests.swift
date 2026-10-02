@@ -690,6 +690,17 @@ final class NetToysTests: XCTestCase {
             ["192.168.1.18": "f8:3d:c6:56:fe:e3"]
         )
         XCTAssertTrue(ARPTable.parseRoutingMessages(message, interfaceIndex: 15).isEmpty)
+        // This Mac's own entry routes through lo0 (index 1) but its link address names en0 (14).
+        var ownHeader = header
+        ownHeader.rtm_index = 1
+        var ownLink = link
+        ownLink[2] = 14
+        var ownMessage = withUnsafeBytes(of: &ownHeader) { Data($0) }
+        ownMessage.append(contentsOf: destination)
+        ownMessage.append(contentsOf: ownLink)
+        XCTAssertEqual(ARPTable.parseRoutingMessages(ownMessage, interfaceIndex: 14),
+                       ["192.168.1.18": "f8:3d:c6:56:fe:e3"])
+        XCTAssertTrue(ARPTable.parseRoutingMessages(ownMessage, interfaceIndex: 1).isEmpty)
         var routedHeader = header
         routedHeader.rtm_flags = RTF_GATEWAY
         var routedMessage = withUnsafeBytes(of: &routedHeader) { Data($0) }

@@ -1122,8 +1122,8 @@ package actor NetToysScanner {
             contract: neighborContract
         )
         var macAddresses = arp
-        // The neighbor table has no usable entry for this Mac's own address; read the interface.
-        if let activeNetwork, let ownMAC = ARPTable.interfaceMAC(named: activeNetwork.interfaceName) {
+        if let activeNetwork, macAddresses[activeNetwork.address.description] == nil,
+           let ownMAC = ARPTable.interfaceMAC(named: activeNetwork.interfaceName) {
             macAddresses[activeNetwork.address.description] = ownMAC
         }
         let (enriched, newlyAlive) = Self.applyNeighbors(scanned, macAddresses: macAddresses)
@@ -1548,7 +1548,8 @@ public nonisolated enum ARPTable {
             let start = dataOffset + Int(link.sdl_nlen)
             guard link.sdl_alen == 6, start + 6 <= Int(link.sdl_len) else { return nil }
             let octets = (0..<6).map { raw.load(fromByteOffset: start + $0, as: UInt8.self) }
-            guard octets.contains(where: { $0 != 0 }) else { return nil }
+            // Apps receive 02:00:00:00:00:00 when macOS hides the address.
+            guard octets != [2, 0, 0, 0, 0, 0], octets.contains(where: { $0 != 0 }) else { return nil }
             return octets.map { String(format: "%02x", $0) }.joined(separator: ":")
         }
         return nil
@@ -1676,13 +1677,12 @@ public nonisolated enum ARPTable {
                 guard messageLength >= headerSize,
                       messageOffset + messageLength <= bytes.count
                 else { break }
-                if let interfaceIndex, header.rtm_index != UInt16(interfaceIndex) {
-                    messageOffset += messageLength
-                    continue
-                }
                 var addressOffset = messageOffset + headerSize
                 var ipAddress: String?
                 var macAddress: String?
+                // Like arp(8), take the interface from the link-layer address. This Mac's own
+                // entry is routed through lo0, so its rtm_index is not the Wi-Fi interface.
+                var linkIndex = UInt16(header.rtm_index)
                 for index in 0..<Int(RTAX_MAX) where header.rtm_addrs & (1 << index) != 0 {
                     guard addressOffset + 2 <= messageOffset + messageLength else { break }
                     let addressLength = Int(bytes[addressOffset])
@@ -1697,6 +1697,8 @@ public nonisolated enum ARPTable {
                             .map { String(bytes[addressOffset + $0]) }
                             .joined(separator: ".")
                     } else if index == Int(RTAX_GATEWAY), family == AF_LINK, addressLength >= 8 {
+                        let sdlIndex = UInt16(bytes[addressOffset + 2]) | UInt16(bytes[addressOffset + 3]) << 8
+                        if sdlIndex != 0 { linkIndex = sdlIndex }
                         let nameLength = Int(bytes[addressOffset + 5])
                         let macLength = Int(bytes[addressOffset + 6])
                         let macOffset = addressOffset + 8 + nameLength
@@ -1711,7 +1713,10 @@ public nonisolated enum ARPTable {
                     }
                     addressOffset += alignedLength
                 }
-                if let ipAddress, let macAddress { result[ipAddress] = macAddress }
+                if let ipAddress, let macAddress,
+                   interfaceIndex.map({ UInt16($0) == linkIndex }) ?? true {
+                    result[ipAddress] = macAddress
+                }
                 messageOffset += messageLength
             }
             return result
