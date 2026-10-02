@@ -319,15 +319,29 @@ public nonisolated enum TailscalePeerCatalog {
             process.standardOutput = output
             process.standardError = FileHandle.nullDevice
 
+            // Poll instead of blocking for EOF: a process launched elsewhere at the same moment
+            // can inherit the pipe's write end and keep it open after this child has exited.
             let reader = Task.detached(priority: .utility) {
                 var data = Data()
                 var exceeded = false
+                let descriptor = output.fileHandleForReading.fileDescriptor
+                var buffer = [UInt8](repeating: 0, count: 8_192)
+                var quietAfterExit = 0
+                let readerDeadline = Date().addingTimeInterval(timeout + 4)
                 while true {
-                    let chunk = autoreleasepool { output.fileHandleForReading.readData(ofLength: 8_192) }
-                    if chunk.isEmpty { break }
+                    var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+                    guard Darwin.poll(&event, 1, 100) > 0 else {
+                        if Date() > readerDeadline { break }
+                        if process.isRunning || process.processIdentifier == 0 { continue }
+                        quietAfterExit += 1
+                        if quietAfterExit >= 3 { break }
+                        continue
+                    }
+                    let count = Darwin.read(descriptor, &buffer, buffer.count)
+                    if count <= 0 { break }
                     let remaining = max(maximumOutputBytes - data.count, 0)
-                    data.append(contentsOf: chunk.prefix(remaining))
-                    exceeded = exceeded || chunk.count > remaining
+                    data.append(contentsOf: buffer.prefix(min(count, remaining)))
+                    exceeded = exceeded || count > remaining
                     if exceeded, process.isRunning { process.terminate() }
                 }
                 return (data: data, exceeded: exceeded)
@@ -353,10 +367,14 @@ public nonisolated enum TailscalePeerCatalog {
                 }
                 if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
             }
-            process.waitUntilExit()
+            // waitUntilExit() can block forever when Foundation misses the child's exit.
+            let reapDeadline = Date().addingTimeInterval(2)
+            while process.isRunning, Date() < reapDeadline {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
             let result = await reader.value
             if Task.isCancelled { throw CancellationError() }
-            guard !timedOut, !result.exceeded, process.terminationStatus == 0 else {
+            guard !process.isRunning, !timedOut, !result.exceeded, process.terminationStatus == 0 else {
                 throw CatalogError.unavailable
             }
             return result.data
