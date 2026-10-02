@@ -866,23 +866,20 @@ struct NetToysScannerView: View {
 
             if model.isScanning {
                 Button("Stop", role: .cancel) { model.cancel() }
+                    .buttonStyle(OnePlusButtonStyle(.neutral, minWidth: Self.scanButtonWidth))
             } else {
                 Button("Scan") { model.start() }
-                    .buttonStyle(OnePlusButtonStyle(.primary))
+                    .buttonStyle(OnePlusButtonStyle(.primary, minWidth: Self.scanButtonWidth))
                     .keyboardShortcut(.return, modifiers: [])
                     .disabled(model.isImporting)
-            }
-            if let notice = model.scanResultNotice {
-                Text(notice)
-                    .onePlusText(.caption)
-                    .lineLimit(1)
-                    .help(notice)
             }
         }
     }
 
+    private static let scanButtonWidth: CGFloat = 72
+
     private var scanPresets: some View {
-        OnePlusActionMenu(model.isImporting ? "Importing..." : "Presets") {
+        OnePlusActionMenu("Presets") {
             Button(activeNetworkCIDR.map { "Local Subnet · \($0)" } ?? "Local Subnet") {
                 if let activeNetworkCIDR { model.useActiveNetwork(activeNetworkCIDR) }
             }
@@ -1237,7 +1234,11 @@ struct NetToysScannerView: View {
                 Text("\(model.openPortResultCount) with open ports")
             }
             Spacer()
-            if let duration = model.lastDuration {
+            if model.isImporting {
+                Text("Importing…")
+            } else if let notice = model.scanResultNotice {
+                Text(notice).lineLimit(1).truncationMode(.middle).help(notice)
+            } else if let duration = model.lastDuration {
                 if let target = model.lastScanTarget {
                     Text("Last scan: \(target)").lineLimit(1).truncationMode(.middle)
                     Text("·")

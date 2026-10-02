@@ -1068,6 +1068,8 @@ package actor NetToysScanner {
         update: (@Sendable (NetToysScanResult) -> Void)? = nil
     ) async -> [NetToysScanResult] {
         let maximum = min(max(concurrency, 1), 256)
+        let activeNetwork = LocalIPv4Network.active()
+        let localDNSServer = await Self.localDNSServer(in: activeNetwork)
         var scanned: [NetToysScanResult] = []
         scanned.reserveCapacity(targets.count)
         var completed = 0
@@ -1094,6 +1096,7 @@ package actor NetToysScanner {
                             adaptiveTCPTimeout: adaptiveTCPTimeout,
                             scanUnresponsiveHosts: scanUnresponsiveHosts,
                             fetchOptions: fetchOptions,
+                            nameServer: Self.nameServer(localDNSServer, for: target.address, in: activeNetwork),
                             update: update
                         )
                     }
@@ -1108,22 +1111,73 @@ package actor NetToysScanner {
             }
             scanned.append(contentsOf: results)
         }
-        let activeNetwork = LocalIPv4Network.active()
         let interfaceIndex = activeNetwork.map { if_nametoindex($0.interfaceName) } ?? 0
-        let arp = await ARPTable.load(
-            addresses: scanned.filter(\.isReachable).map(\.address),
+        // A local host that answered ARP is alive even when every probed port is closed.
+        let neighborCandidates = scanned.filter {
+            $0.isReachable || activeNetwork?.contains($0.address.description) == true
+        }.map(\.address)
+        let arp = Task.isCancelled ? [:] : await ARPTable.load(
+            addresses: neighborCandidates,
             interfaceIndex: interfaceIndex,
             contract: neighborContract
         )
-        return scanned.map { result in
-            let macAddress = arp[result.address.description]
-            guard macAddress != nil else { return result }
+        let (enriched, newlyAlive) = Self.applyNeighbors(scanned, macAddresses: arp)
+        let names = await Self.reverseNames(newlyAlive, server: localDNSServer)
+        return enriched.map { result in
+            var result = result
+            if let name = names[result.address] { result.hostname = name }
+            if result.macAddress != nil { update?(result) }
+            return result
+        }.sorted { $0.address < $1.address }
+    }
+
+    nonisolated static func applyNeighbors(
+        _ results: [NetToysScanResult],
+        macAddresses: [String: String]
+    ) -> (results: [NetToysScanResult], newlyAlive: [IPv4Address]) {
+        var newlyAlive: [IPv4Address] = []
+        let updated = results.map { result in
+            guard let macAddress = macAddresses[result.address.description] else { return result }
             var enriched = result
             enriched.macAddress = macAddress
             enriched.vendor = MACVendorDatabase.bundled.vendor(for: macAddress)
-            update?(enriched)
+            if !enriched.isReachable {
+                enriched.isReachable = true
+                newlyAlive.append(result.address)
+            }
             return enriched
-        }.sorted { $0.address < $1.address }
+        }
+        return (updated, newlyAlive)
+    }
+
+    private nonisolated static func reverseNames(
+        _ addresses: [IPv4Address],
+        server: IPv4Address?
+    ) async -> [IPv4Address: String] {
+        guard !addresses.isEmpty, !Task.isCancelled else { return [:] }
+        return await withTaskGroup(of: (IPv4Address, String?).self) { group in
+            for address in addresses {
+                group.addTask { (address, await HostResolver.reverse(address, localServer: server)) }
+            }
+            var names: [IPv4Address: String] = [:]
+            for await (address, name) in group { if let name { names[address] = name } }
+            return names
+        }
+    }
+
+    /// Home routers answer PTR queries for their DHCP clients; public resolvers such as 1.1.1.1 cannot.
+    private nonisolated static func localDNSServer(in network: LocalIPv4Network?) async -> IPv4Address? {
+        guard let network, let route = await DefaultRoute.load(),
+              route.interfaceName == network.interfaceName, network.contains(route.gateway) else { return nil }
+        return IPv4Address(route.gateway)
+    }
+
+    nonisolated static func nameServer(
+        _ server: IPv4Address?,
+        for address: IPv4Address,
+        in network: LocalIPv4Network?
+    ) -> IPv4Address? {
+        network?.contains(address.description) == true ? server : nil
     }
 
     private nonisolated static func scanHost(
@@ -1137,6 +1191,7 @@ package actor NetToysScanner {
         adaptiveTCPTimeout: Bool,
         scanUnresponsiveHosts: Bool,
         fetchOptions: NetToysFetchOptions,
+        nameServer: IPv4Address?,
         update: (@Sendable (NetToysScanResult) -> Void)?
     ) async -> NetToysScanResult {
         let needsPing = collectPingDetails || livenessMethod == .icmpAndTCP || adaptiveTCPTimeout
@@ -1191,7 +1246,7 @@ package actor NetToysScanner {
         update?(result)
         guard reachable, !Task.isCancelled else { return result }
 
-        async let hostname = HostResolver.reverse(address)
+        async let hostname = HostResolver.reverse(address, localServer: nameServer)
         let metadata = await NetToysProtocolFetchers.collect(
             address: address,
             openPorts: openPorts,
@@ -1252,8 +1307,117 @@ nonisolated enum HostResolver {
         await Task.detached(priority: .utility) { forwardSynchronously(hostname) }.value
     }
 
-    static func reverse(_ address: IPv4Address) async -> String? {
-        await Task.detached(priority: .utility) { reverseSynchronously(address) }.value
+    static func reverse(_ address: IPv4Address, localServer: IPv4Address? = nil) async -> String? {
+        await Task.detached(priority: .utility) {
+            reverseSynchronously(address, flags: 0)
+                ?? localServer.flatMap { unicastPTR(address, server: $0) }
+                ?? reverseSynchronously(address, flags: DNSServiceFlags(kDNSServiceFlagsForceMulticast))
+        }.value
+    }
+
+    private static func reverseName(_ address: IPv4Address) -> String {
+        address.description.split(separator: ".").reversed().joined(separator: ".") + ".in-addr.arpa"
+    }
+
+    static func unicastPTR(_ address: IPv4Address, server: IPv4Address, timeoutMilliseconds: Int32 = 800) -> String? {
+        let id = UInt16.random(in: 1...UInt16.max)
+        let query = ptrQuery(for: address, id: id)
+        let descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        var destination = sockaddr_in()
+        destination.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        destination.sin_family = sa_family_t(AF_INET)
+        destination.sin_port = UInt16(53).bigEndian
+        destination.sin_addr.s_addr = server.rawValue.bigEndian
+        let sent = query.withUnsafeBytes { bytes in
+            withUnsafePointer(to: &destination) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    sendto(descriptor, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+        }
+        guard sent == query.count else { return nil }
+        var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+        guard Darwin.poll(&event, 1, timeoutMilliseconds) > 0 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: 512)
+        let received = recv(descriptor, &buffer, buffer.count, 0)
+        guard received > 0 else { return nil }
+        return ptrAnswer(in: Array(buffer.prefix(received)), id: id)
+    }
+
+    static func ptrQuery(for address: IPv4Address, id: UInt16) -> [UInt8] {
+        var packet: [UInt8] = [UInt8(id >> 8), UInt8(id & 0xFF), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]
+        for label in reverseName(address).split(separator: ".") {
+            packet.append(UInt8(label.utf8.count))
+            packet.append(contentsOf: label.utf8)
+        }
+        packet.append(contentsOf: [0, 0, 12, 0, 1])
+        return packet
+    }
+
+    /// Returns the first PTR answer of a reply to `id`. Rejects truncated, failed, and looping messages.
+    static func ptrAnswer(in message: [UInt8], id: UInt16) -> String? {
+        guard message.count >= 12,
+              UInt16(message[0]) << 8 | UInt16(message[1]) == id,
+              message[2] & 0x80 != 0, message[3] & 0x0F == 0 else { return nil }
+        let questions = Int(message[4]) << 8 | Int(message[5])
+        let answers = Int(message[6]) << 8 | Int(message[7])
+        var offset = 12
+        for _ in 0..<questions {
+            guard let end = nameEnd(in: message, from: offset), end + 4 <= message.count else { return nil }
+            offset = end + 4
+        }
+        for _ in 0..<answers {
+            guard let end = nameEnd(in: message, from: offset), end + 10 <= message.count else { return nil }
+            let type = Int(message[end]) << 8 | Int(message[end + 1])
+            let length = Int(message[end + 8]) << 8 | Int(message[end + 9])
+            let data = end + 10
+            guard data + length <= message.count else { return nil }
+            if type == 12 { return name(in: message, at: data) }
+            offset = data + length
+        }
+        return nil
+    }
+
+    private static func nameEnd(in message: [UInt8], from start: Int) -> Int? {
+        var offset = start
+        while offset < message.count {
+            let length = Int(message[offset])
+            if length == 0 { return offset + 1 }
+            if length & 0xC0 == 0xC0 { return offset + 2 <= message.count ? offset + 2 : nil }
+            guard length <= 63 else { return nil }
+            offset += 1 + length
+        }
+        return nil
+    }
+
+    private static func name(in message: [UInt8], at start: Int) -> String? {
+        var labels: [String] = []
+        var offset = start
+        var jumps = 0
+        var total = 0
+        while offset < message.count {
+            let length = Int(message[offset])
+            if length == 0 {
+                let joined = labels.joined(separator: ".")
+                return labels.isEmpty || total > 255 ? nil : joined
+            }
+            if length & 0xC0 == 0xC0 {
+                guard offset + 1 < message.count, jumps < 16 else { return nil }
+                jumps += 1
+                offset = (length & 0x3F) << 8 | Int(message[offset + 1])
+                continue
+            }
+            guard length <= 63, offset + 1 + length <= message.count,
+                  let label = String(bytes: message[(offset + 1)...(offset + length)], encoding: .utf8),
+                  label.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
+            else { return nil }
+            labels.append(label)
+            total += length + 1
+            offset += 1 + length
+        }
+        return nil
     }
 
     private static func forwardSynchronously(_ hostname: String) -> [IPv4Address] {
@@ -1279,13 +1443,13 @@ nonisolated enum HostResolver {
         return result.sorted()
     }
 
-    private static func reverseSynchronously(_ address: IPv4Address) -> String? {
-        let queryName = address.description.split(separator: ".").reversed().joined(separator: ".") + ".in-addr.arpa."
+    private static func reverseSynchronously(_ address: IPv4Address, flags: DNSServiceFlags) -> String? {
+        let queryName = reverseName(address) + "."
         var answer: String?
         return withUnsafeMutablePointer(to: &answer) { answerPointer in
             var query: DNSServiceRef?
             let status = DNSServiceQueryRecord(
-                &query, 0, 0, queryName,
+                &query, flags, 0, queryName,
                 UInt16(kDNSServiceType_PTR), UInt16(kDNSServiceClass_IN),
                 { _, flags, _, error, _, _, _, length, data, _, context in
                     guard error == kDNSServiceErr_NoError,

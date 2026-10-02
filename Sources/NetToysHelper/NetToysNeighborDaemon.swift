@@ -3,6 +3,7 @@ import NetToysCore
 
 final class NetToysNeighborDaemon: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let service = NetToysNeighborService()
+    private let idleExit = NetToysDaemonIdleExit()
 
     static func run() -> Never {
         let contract = NetToysNeighborServiceContract(host: .standalone)
@@ -18,6 +19,7 @@ final class NetToysNeighborDaemon: NSObject, NSXPCListenerDelegate, @unchecked S
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         connection.exportedInterface = NSXPCInterface(with: NetToysNeighborXPCProtocol.self)
         connection.exportedObject = service
+        idleExit.track(connection)
         connection.resume()
         return true
     }

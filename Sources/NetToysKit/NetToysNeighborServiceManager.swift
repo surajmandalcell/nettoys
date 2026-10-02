@@ -11,10 +11,14 @@ public final class NetToysNeighborServiceManager {
     public private(set) var status: SMAppService.Status?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private let readStatus: @Sendable () -> SMAppService.Status
+    @ObservationIgnored private let contract: NetToysNeighborServiceContract
+    @ObservationIgnored private var checkedForStaleDaemon: Bool
 
     public init(host: NetToysHostID, refreshOnInit: Bool = true,
                 readStatus: (@Sendable () -> SMAppService.Status)? = nil) {
         let contract = NetToysNeighborServiceContract(host: host)
+        self.contract = contract
+        checkedForStaleDaemon = readStatus != nil
         service = .daemon(plistName: contract.daemonPlistName)
         self.readStatus = readStatus ?? { SMAppService.daemon(plistName: contract.daemonPlistName).status }
         if refreshOnInit { refresh() }
@@ -56,7 +60,17 @@ public final class NetToysNeighborServiceManager {
             self.status = status
             self.revision &+= 1
             self.refreshTask = nil
+            if status == .enabled { await self.repairStaleDaemonOnce() }
         }
+    }
+
+    /// An approved daemon keeps running across app updates. Its replaced binary then fails
+    /// the code-signing check, and every MAC lookup is dropped. Restart it once per launch.
+    private func repairStaleDaemonOnce() async {
+        guard !checkedForStaleDaemon else { return }
+        checkedForStaleDaemon = true
+        guard await NetToysNeighborXPCClient.probe(contract: contract) == .stale else { return }
+        do { try await restart() } catch { errorMessage = error.localizedDescription }
     }
 
     public func restart() async throws {

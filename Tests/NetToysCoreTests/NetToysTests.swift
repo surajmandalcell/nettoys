@@ -992,6 +992,70 @@ final class NetToysTests: XCTestCase {
         XCTAssertNil(HostResolver.ptrHostname(from: Data([4, 65, 66, 67, 0])))
     }
 
+    func testUnicastPTRReplyFollowsCompressionAndRejectsBadReplies() throws {
+        let address = try XCTUnwrap(IPv4Address("192.168.1.4"))
+        let query = HostResolver.ptrQuery(for: address, id: 0x1234)
+        XCTAssertEqual(Array(query.prefix(4)), [0x12, 0x34, 0x01, 0x00])
+        // Router-style reply: question copied, answer name is a pointer to it, the PTR
+        // name ends in a pointer to "bbrouter" written inside an earlier label run.
+        var reply = query
+        reply[2] = 0x81; reply[3] = 0x80; reply[7] = 1
+        let target: [UInt8] = [9] + Array("PB-iphone".utf8) + [8] + Array("bbrouter".utf8) + [0]
+        reply += [0xC0, 0x0C, 0, 12, 0, 1, 0, 0, 0, 60, 0, UInt8(target.count)] + target
+        XCTAssertEqual(HostResolver.ptrAnswer(in: reply, id: 0x1234), "PB-iphone.bbrouter")
+
+        // The PTR name itself is compressed: "desk" then a pointer to "in-addr.arpa" in the question.
+        let inAddrOffset = 12 + 2 + 2 + 4 + 4
+        var compressed = query
+        compressed[2] = 0x81; compressed[3] = 0x80; compressed[7] = 1
+        compressed += [0xC0, 0x0C, 0, 12, 0, 1, 0, 0, 0, 60, 0, 7] + [4] + Array("desk".utf8)
+            + [0xC0, UInt8(inAddrOffset)]
+        XCTAssertEqual(HostResolver.ptrAnswer(in: compressed, id: 0x1234), "desk.in-addr.arpa")
+
+        XCTAssertNil(HostResolver.ptrAnswer(in: reply, id: 0x9999), "wrong ID")
+        var failed = reply; failed[3] = 0x83
+        XCTAssertNil(HostResolver.ptrAnswer(in: failed, id: 0x1234), "NXDOMAIN")
+        XCTAssertNil(HostResolver.ptrAnswer(in: Array(reply.prefix(reply.count - 3)), id: 0x1234), "truncated")
+        var loop = query
+        loop[2] = 0x81; loop[3] = 0x80; loop[7] = 1
+        loop += [0xC0, 0x0C, 0, 12, 0, 1, 0, 0, 0, 60, 0, 2, 0xC0, UInt8(query.count + 12)]
+        XCTAssertNil(HostResolver.ptrAnswer(in: loop, id: 0x1234), "pointer loop")
+    }
+
+    func testNeighborEntryMarksSilentLocalHostAliveWithMAC() throws {
+        let phone = try XCTUnwrap(IPv4Address("192.168.1.9"))
+        let router = try XCTUnwrap(IPv4Address("192.168.1.1"))
+        let empty = try XCTUnwrap(IPv4Address("192.168.1.50"))
+        let results = [
+            NetToysScanResult(address: router, isReachable: true, responseMilliseconds: 3,
+                              hostname: nil, macAddress: nil, vendor: nil, openPorts: [80]),
+            NetToysScanResult(address: phone, isReachable: false, responseMilliseconds: nil,
+                              hostname: nil, macAddress: nil, vendor: nil, openPorts: []),
+            NetToysScanResult(address: empty, isReachable: false, responseMilliseconds: nil,
+                              hostname: nil, macAddress: nil, vendor: nil, openPorts: []),
+        ]
+        let (updated, newlyAlive) = NetToysScanner.applyNeighbors(results, macAddresses: [
+            "192.168.1.1": "14:C3:5E:29:31:1A", "192.168.1.9": "4C:E6:C0:5E:14:48",
+        ])
+        XCTAssertEqual(newlyAlive, [phone])
+        XCTAssertEqual(updated.map(\.isReachable), [true, true, false])
+        XCTAssertEqual(updated.map(\.macAddress), ["14:C3:5E:29:31:1A", "4C:E6:C0:5E:14:48", nil])
+        XCTAssertEqual(updated[0].openPorts, [80])
+    }
+
+    func testIdleDaemonExitsOnlyAfterItsLastConnectionCloses() throws {
+        let exits = ScanUpdateRecorder()
+        let marker = NetToysScanResult(address: IPv4Address(rawValue: 1), isReachable: true, responseMilliseconds: nil,
+                                       hostname: nil, macAddress: nil, vendor: nil, openPorts: [])
+        let idle = NetToysDaemonIdleExit(delay: 0.2) { exits.append(marker) }
+        idle.connectionStarted()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertTrue(exits.values.isEmpty, "An open connection keeps the daemon alive")
+        idle.connectionEnded()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(exits.values.count, 1)
+    }
+
     func testSSHConfigEntriesExposeLiteralHostAddressAndPort() throws {
         let data = Data("Host jetson\n  User suraj\n  HostName 192.168.1.8\n  Port 2222\nMatch host other\n  HostName 10.0.0.2\n".utf8)
         XCTAssertEqual(
