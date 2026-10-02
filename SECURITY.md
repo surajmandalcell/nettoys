@@ -15,9 +15,10 @@ or scan results. You should receive a reply within seven days.
 
 ## Security boundaries
 
-- NetToys edits only the `HostName` line of a selected host in
-  `~/.ssh/config`. It keeps a private backup, verifies the new address, and
-  never changes a host key. A changed host key still stops the connection.
+- When a host moves, NetToys changes only that host's `HostName` line in
+  `~/.ssh/config`. It keeps a private backup and verifies the new address.
+  Setup may add one marked host-key policy block so an address change does
+  not trigger a prompt. A changed host key still stops the connection.
 - The neighbor helper is a signed launch daemon. It answers only signed
   NetToys clients over XPC and returns the system neighbor table. It takes no
   arguments.
