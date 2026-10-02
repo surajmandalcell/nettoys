@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="#build">Build from source</a> · macOS 15+ · Also built into <a href="https://github.com/surajmandalcell/macpowertoys">MacPowerToys</a> · MIT
+  <a href="https://github.com/surajmandalcell/nettoys/releases/latest">Download for macOS</a> · Apple Silicon · macOS 15+ · Also built into <a href="https://github.com/surajmandalcell/macpowertoys">MacPowerToys</a> · MIT
 </p>
 
 ## What it does
@@ -34,7 +34,10 @@
 
 ## Setup
 
-1. Build the app (below) and move `NetToys.app` to Applications.
+1. Download the latest release, unzip it, and move `NetToys.app` to
+   Applications. The build is signed for personal use and not notarized; if
+   macOS blocks the first launch, choose **Open Anyway** in **System Settings →
+   Privacy & Security**.
 2. Allow **Local Network** access when you first scan. Allow **Location** if you
    want Wi-Fi names; macOS hides network names without it.
 3. Turn on monitoring in **Settings**. macOS asks you once to approve the
