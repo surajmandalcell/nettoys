@@ -1070,6 +1070,7 @@ package actor NetToysScanner {
         let maximum = min(max(concurrency, 1), 256)
         let activeNetwork = LocalIPv4Network.active()
         let localDNSServer = await Self.localDNSServer(in: activeNetwork)
+        if let localDNSServer { await Self.waitForLocalNetworkAccess(gateway: localDNSServer) }
         var scanned: [NetToysScanResult] = []
         scanned.reserveCapacity(targets.count)
         var completed = 0
@@ -1167,6 +1168,18 @@ package actor NetToysScanner {
             var names: [IPv4Address: String] = [:]
             for await (address, name) in group { if let name { names[address] = name } }
             return names
+        }
+    }
+
+    /// Right after launch macOS can still be activating Local Network access, and LAN
+    /// connections fail at once. A scan started then reported every port closed.
+    /// Wait until a gateway probe stops failing instantly, for at most three seconds.
+    private nonisolated static func waitForLocalNetworkAccess(gateway: IPv4Address) async {
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, !Task.isCancelled {
+            let probe = await TCPPortProbe.check(host: gateway.description, port: 80, timeoutMilliseconds: 500)
+            if probe.state != .unreachable || probe.latencyMilliseconds >= 20 { return }
+            try? await Task.sleep(for: .milliseconds(250))
         }
     }
 
