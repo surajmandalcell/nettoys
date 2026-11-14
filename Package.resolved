@@ -1,13 +1,13 @@
 {
-  "originHash" : "b74931591c74f33141bfae2662006abed62c9896098b38c77f7f9fdb54bcd84d",
+  "originHash" : "cc6e8b255eaaabb64db11ad8f27a71e2ffb03998c8705071f64b70aee64e5713",
   "pins" : [
     {
       "identity" : "oneplus-ui",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/surajmandalcell/oneplus-ui.git",
       "state" : {
-        "revision" : "e6a1843f138e0373c12d8ea55991dcaf10adc519",
-        "version" : "1.0.3"
+        "revision" : "697a8776396c1945dda4d5949d7c403aedad0adf",
+        "version" : "1.0.4"
       }
     }
   ],
