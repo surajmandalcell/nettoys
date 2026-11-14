@@ -34,19 +34,38 @@ public final class NetToysLoginItemManager {
     public func setEnabled(_ enabled: Bool) async -> Bool {
         errorMessage = nil
         do {
-            let requests = try NetToysConfigurationStore.setBackgroundRequest(enabled, for: host).backgroundRequests
+            let requests = try await setBackgroundRequest(enabled).backgroundRequests
             if !enabled {
                 let owner = NetToysConfigurationStore.status()?.ownerBundleID
                 if owner != host.rawValue || requests.isEmpty { try await unregister() }
                 return true
             }
             if await enable() { return true }
-            try NetToysConfigurationStore.setBackgroundRequest(false, for: host)
+            try await setBackgroundRequest(false)
         } catch {
             errorMessage = error.localizedDescription
-            if !enabled { try? NetToysConfigurationStore.setBackgroundRequest(true, for: host) }
+            if !enabled { _ = try? await setBackgroundRequest(true) }
         }
         return false
+    }
+
+    /// Off the main thread: true when this host requested background work or its helper is registered.
+    public nonisolated func hasBackgroundWork() async -> Bool {
+        let host = host
+        return await Task.detached(priority: .utility) {
+            let status = SMAppService.loginItem(identifier: host.helperIdentifier).status
+            return NetToysConfigurationStore.load().backgroundRequests.contains(host)
+                || (status != .notRegistered && status != .notFound)
+        }.value
+    }
+
+    /// The store transaction waits on a cross-process file lock, so it never runs on the main thread.
+    @discardableResult
+    private func setBackgroundRequest(_ enabled: Bool) async throws -> NetToysConfiguration {
+        let host = host
+        return try await Task.detached(priority: .userInitiated) {
+            try NetToysConfigurationStore.setBackgroundRequest(enabled, for: host)
+        }.value
     }
 
     /// Explicit user action. The signed parent must be running; no parent is launched.

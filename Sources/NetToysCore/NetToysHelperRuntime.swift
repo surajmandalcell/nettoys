@@ -73,6 +73,10 @@ public actor NetToysHelperRuntime {
     private var ssidAccess: NetToysSSIDAccessState?
     private var wifiFailoverMonitor = WiFiFailoverMonitor()
     private var wifiFailoverStatus: WiFiFailoverStatus?
+    private var lastWrittenStatus: NetToysHelperStatus?
+    private var configurationStamp: Date?
+    private var cachedConfiguration = NetToysConfiguration()
+    private static let heartbeatRefresh: TimeInterval = 20
 
     public init(owner: NetToysHostID) {
         self.owner = owner
@@ -97,11 +101,21 @@ public actor NetToysHelperRuntime {
         defer { heartbeat.cancel() }
         saveStatus([])
         while !Task.isCancelled {
-            let configuration = NetToysConfigurationStore.load()
+            let configuration = currentConfiguration()
             guard !configuration.backgroundRequests.isEmpty else { return }
             await tick(configuration)
             try? await Task.sleep(for: .seconds(configuration.probeInterval))
         }
+    }
+
+    /// Decodes the configuration only after its file changes.
+    private func currentConfiguration() -> NetToysConfiguration {
+        let stamp = NetToysConfigurationStore.modificationDate(NetToysPaths.configuration)
+        if stamp == nil || stamp != configurationStamp {
+            cachedConfiguration = NetToysConfigurationStore.load()
+            configurationStamp = stamp
+        }
+        return cachedConfiguration
     }
 
     private func tick(_ configuration: NetToysConfiguration) async {
@@ -120,9 +134,12 @@ public actor NetToysHelperRuntime {
                     : status(anchor, .idle)
             )
         }
-        if configuration.wifiPriority.isEnabled
-            || (configuration.recordsNetworkHistory
-                && Date().timeIntervalSince(lastHistoryCheck) >= 30) {
+        // Wi-Fi Priority probes every 10 s, and on every tick while a failover can still follow.
+        let sinceLastCheck = Date().timeIntervalSince(lastHistoryCheck)
+        let failoverPending = wifiFailoverMonitor.outageBeganAt != nil
+            && wifiFailoverMonitor.attempts < configuration.wifiPriority.ssids.count
+        if (configuration.wifiPriority.isEnabled && (failoverPending || sinceLastCheck >= 10))
+            || (configuration.recordsNetworkHistory && sinceLastCheck >= 30) {
             lastHistoryCheck = Date()
             await checkNetwork(configuration)
         } else if !configuration.wifiPriority.isEnabled {
@@ -451,18 +468,19 @@ public actor NetToysHelperRuntime {
         async let internet = NetworkProbe.internet()
         let ssid = NetworkSSID.current(interfaceName: route.interfaceName)
         let internetState = await internet
+        let gatewayState = await gateway
         recordNetwork(
             networkID: route.networkID,
             ssid: ssid,
             usesSSIDIdentity: NetworkSSID.isWiFi(interfaceName: route.interfaceName),
-            gateway: await gateway,
+            gateway: gatewayState,
             internet: internetState,
             shouldRecordHistory: configuration.recordsNetworkHistory
         )
         await updateWiFiFailover(
             configuration.wifiPriority,
             currentSSID: ssid,
-            isFailure: internetState == .unreachable,
+            isFailure: WiFiFailoverMonitor.isOutage(internet: internetState, gateway: gatewayState),
             hasActiveRoute: true
         )
     }
@@ -486,11 +504,16 @@ public actor NetToysHelperRuntime {
         guard wifiFailoverMonitor.shouldAttempt(
             isFailure: isFailure,
             threshold: configuration.outageThreshold,
+            maximumAttempts: configuration.ssids.count,
             at: date
         ) else {
+            let attempts = wifiFailoverMonitor.attempts
+            let exhausted = isFailure && attempts > 0 && attempts >= configuration.ssids.count
             wifiFailoverStatus = WiFiFailoverStatus(
-                state: isFailure ? .waiting : .monitoring,
-                message: isFailure
+                state: exhausted ? .failed : isFailure ? .waiting : .monitoring,
+                message: exhausted
+                    ? "Every saved Wi-Fi network was tried. Waiting for the connection to return."
+                    : isFailure
                     ? "Internet is unavailable. Waiting before failover."
                     : "Internet is reachable.",
                 updatedAt: date
@@ -587,41 +610,50 @@ public actor NetToysHelperRuntime {
         }
     }
 
+    /// Rewrites the file only when its content changed, or to refresh the heartbeat.
     private func writeStatus() {
-        try? NetToysConfigurationStore.saveStatus(
-            NetToysHelperStatus(
-                version: NetToysBuild.statusSchemaVersion,
-                heartbeat: Date(),
-                anchors: currentStatuses,
-                network: networkSnapshot,
-                sourceCommit: (Bundle.main.object(forInfoDictionaryKey: "NetToysSourceCommit")
-                    ?? Bundle.main.object(forInfoDictionaryKey: "MPTSourceCommit")) as? String,
-                ssidAccess: ssidAccess,
-                wifiFailover: wifiFailoverStatus,
-                ownerBundleID: owner.rawValue,
-                ownerPID: ProcessInfo.processInfo.processIdentifier,
-                packageVersion: NetToysBuild.packageVersion
-            )
+        let now = Date()
+        if let last = lastWrittenStatus,
+           now.timeIntervalSince(last.heartbeat) < Self.heartbeatRefresh,
+           makeStatus(heartbeat: last.heartbeat) == last { return }
+        let status = makeStatus(heartbeat: now)
+        guard (try? NetToysConfigurationStore.saveStatus(status)) != nil else { return }
+        lastWrittenStatus = status
+    }
+
+    private func makeStatus(heartbeat: Date) -> NetToysHelperStatus {
+        NetToysHelperStatus(
+            version: NetToysBuild.statusSchemaVersion,
+            heartbeat: heartbeat,
+            anchors: currentStatuses,
+            network: networkSnapshot,
+            sourceCommit: (Bundle.main.object(forInfoDictionaryKey: "NetToysSourceCommit")
+                ?? Bundle.main.object(forInfoDictionaryKey: "MPTSourceCommit")) as? String,
+            ssidAccess: ssidAccess,
+            wifiFailover: wifiFailoverStatus,
+            ownerBundleID: owner.rawValue,
+            ownerPID: ProcessInfo.processInfo.processIdentifier,
+            packageVersion: NetToysBuild.packageVersion
         )
     }
 }
 
 nonisolated enum NetworkProbe {
     static func gateway(_ host: String) async -> NetworkReachability {
-        await Task.detached(priority: .utility) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/sbin/ping")
-            process.arguments = ["-n", "-c", "1", "-W", "1000", host]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                process.waitUntilExit()
-                return process.terminationStatus == 0 ? .reachable : .unreachable
-            } catch {
-                return .unknown
-            }
-        }.value
+        do {
+            let result = try await SSHProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/sbin/ping"),
+                arguments: ["-n", "-c", "1", "-W", "1000", "-t", "2", host],
+                environment: ProcessInfo.processInfo.environment,
+                maximumOutputBytes: 65_536,
+                timeout: 4
+            )
+            return result.status == 0 ? .reachable : .unreachable
+        } catch SSHKeyAccessError.timeout {
+            return .unreachable
+        } catch {
+            return .unknown
+        }
     }
 
     static func internet() async -> NetworkReachability {

@@ -1347,6 +1347,40 @@ final class NetToysTests: XCTestCase {
         XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt.addingTimeInterval(22)))
     }
 
+    func testWiFiOutageNeedsInternetAndGatewayFailure() {
+        XCTAssertTrue(WiFiFailoverMonitor.isOutage(internet: .unreachable, gateway: .unreachable))
+        XCTAssertTrue(WiFiFailoverMonitor.isOutage(internet: .unreachable, gateway: .unknown))
+        XCTAssertFalse(WiFiFailoverMonitor.isOutage(internet: .unreachable, gateway: .reachable))
+        XCTAssertFalse(WiFiFailoverMonitor.isOutage(internet: .reachable, gateway: .unreachable))
+        XCTAssertFalse(WiFiFailoverMonitor.isOutage(internet: .unknown, gateway: .unreachable))
+        XCTAssertEqual(WiFiPriorityConfiguration().outageThreshold, 30)
+        XCTAssertEqual(WiFiPriorityConfiguration(outageThreshold: 5).outageThreshold, 30)
+    }
+
+    func testWiFiFailoverStopsAfterOnePassThroughPriorities() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var monitor = WiFiFailoverMonitor()
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 30, maximumAttempts: 2, at: start))
+        XCTAssertTrue(monitor.shouldAttempt(isFailure: true, threshold: 30, maximumAttempts: 2, at: start + 30))
+        monitor.didAttempt(at: start + 30)
+        XCTAssertTrue(monitor.shouldAttempt(isFailure: true, threshold: 30, maximumAttempts: 2, at: start + 60))
+        monitor.didAttempt(at: start + 60)
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 30, maximumAttempts: 2, at: start + 300))
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: false, threshold: 30, maximumAttempts: 2, at: start + 301))
+        XCTAssertEqual(monitor.attempts, 0)
+    }
+
+    func testPingProbeHasOwnDeadlineAndKillTimeout() throws {
+        let address = try XCTUnwrap(IPv4Address("192.168.1.1"))
+        let plan = PingProbe.invocation(address: address, count: 2, timeoutMilliseconds: 750)
+        XCTAssertEqual(plan.arguments, ["-n", "-c", "2", "-W", "750", "-t", "3", "192.168.1.1"])
+        XCTAssertEqual(plan.killAfter, 4)
+        let longest = PingProbe.invocation(address: address, count: 9, timeoutMilliseconds: 9_000)
+        XCTAssertEqual(longest.arguments[5...6], ["-t", "26"])
+        XCTAssertEqual(longest.killAfter, 27)
+        XCTAssertLessThanOrEqual(PingProbe.maximumConcurrent, 16)
+    }
+
     func testReplacingAnchorPreservesOtherConfiguration() throws {
         let first = SSHAnchorConfiguration(
             hostAlias: "jetson",
@@ -1443,7 +1477,7 @@ final class NetToysTests: XCTestCase {
             now: now
         ))
         XCTAssertFalse(NetToysHelperIdentity.hasFreshHeartbeat(
-            NetToysHelperStatus(version: 1, heartbeat: now.addingTimeInterval(-8), anchors: []),
+            NetToysHelperStatus(version: 1, heartbeat: now.addingTimeInterval(-46), anchors: []),
             now: now
         ))
         XCTAssertFalse(NetToysHelperIdentity.hasFreshHeartbeat(nil, now: now))

@@ -76,7 +76,8 @@ package nonisolated enum NetToysStoreTransaction {
 public nonisolated enum NetToysHelperIdentity {
     public static func hasFreshHeartbeat(_ status: NetToysHelperStatus?, now: Date = Date(),
                                         expectedSourceCommit: String? = nil) -> Bool {
-        guard let status, (0...7).contains(now.timeIntervalSince(status.heartbeat)) else { return false }
+        // The helper refreshes an unchanged status every 20 s (NetToysHelperRuntime.heartbeatRefresh).
+        guard let status, (0...45).contains(now.timeIntervalSince(status.heartbeat)) else { return false }
         guard let expectedSourceCommit, !expectedSourceCommit.isEmpty,
               !expectedSourceCommit.hasPrefix("$(") else { return true }
         return status.sourceCommit == expectedSourceCommit

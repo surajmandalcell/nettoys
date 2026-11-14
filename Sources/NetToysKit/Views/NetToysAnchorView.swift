@@ -468,6 +468,7 @@ final class NetToysAnchorViewModel {
 struct NetToysAnchorView: View {
     @State private var model: NetToysAnchorViewModel
     @State private var pendingRemoval: UUID?
+    @Environment(\.onePlusIsVisible) private var isVisible
 
     init(host: NetToysHost) { _model = State(initialValue: NetToysAnchorViewModel(host: host)) }
 
@@ -496,7 +497,8 @@ struct NetToysAnchorView: View {
             addAnchorSection
             anchorsSection
         }
-        .task {
+        .task(id: isVisible) {
+            guard isVisible else { return }
             while !Task.isCancelled {
                 await model.refresh()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }

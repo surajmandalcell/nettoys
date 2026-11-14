@@ -114,7 +114,7 @@ final class NetToysOwnershipTests: XCTestCase {
         let signed: (NetToysHostID, Int32) -> Bool = { $0 == .standalone && $1 == 123 }
         XCTAssertTrue(NetToysHelperIdentity.isCompatible(status, now: now, verifyOwner: signed))
         XCTAssertFalse(NetToysHelperIdentity.isCompatible(status, now: now, verifyOwner: { _, _ in false }))
-        XCTAssertFalse(NetToysHelperIdentity.isCompatible(status, now: now.addingTimeInterval(8), verifyOwner: signed))
+        XCTAssertFalse(NetToysHelperIdentity.isCompatible(status, now: now.addingTimeInterval(46), verifyOwner: signed))
         XCTAssertFalse(NetToysHelperIdentity.isCompatible(status, now: now.addingTimeInterval(-1), verifyOwner: signed))
         status.ownerPID = nil
         XCTAssertFalse(NetToysHelperIdentity.isCompatible(status, now: now, verifyOwner: signed))

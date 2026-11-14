@@ -243,33 +243,60 @@ public nonisolated enum NetToysLivenessMethod: String, Codable, CaseIterable, Id
     public var id: String { rawValue }
 }
 
+/// A counting semaphore that bounds concurrent subprocesses for async callers.
+actor ProcessGate {
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) { available = max(limit, 1) }
+
+    func acquire() async {
+        guard available == 0 else { available -= 1; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty { available += 1 } else { waiters.removeFirst().resume() }
+    }
+}
+
 package nonisolated enum PingProbe {
+    /// At most this many ping subprocesses run at once, whatever the scan concurrency.
+    static let maximumConcurrent = 16
+    private static let gate = ProcessGate(limit: maximumConcurrent)
+
     static func check(
         address: IPv4Address,
         count: Int,
         timeoutMilliseconds: Int
     ) async -> PingProbeResult? {
-        await Task.detached(priority: .utility) {
-            let process = Process()
-            let pipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/sbin/ping")
-            process.arguments = [
-                "-n", "-c", String(min(max(count, 1), 5)),
-                "-W", String(min(max(timeoutMilliseconds, 100), 5_000)),
-                address.description
-            ]
-            process.environment = ProcessInfo.processInfo.environment.merging(["LC_ALL": "C"]) { _, new in new }
-            process.standardOutput = pipe
-            process.standardError = pipe
-            do {
-                try process.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                return parse(String(decoding: data, as: UTF8.self))
-            } catch {
-                return nil
-            }
-        }.value
+        let plan = invocation(address: address, count: count, timeoutMilliseconds: timeoutMilliseconds)
+        await gate.acquire()
+        let result = try? await SSHProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/sbin/ping"),
+            arguments: plan.arguments,
+            environment: ProcessInfo.processInfo.environment.merging(["LC_ALL": "C"]) { _, new in new },
+            maximumOutputBytes: 65_536,
+            timeout: plan.killAfter
+        )
+        await gate.release()
+        guard let result else { return nil }
+        return parse(result.standardOutput + result.standardError)
+    }
+
+    /// ping's own `-t` deadline ends the probe; the runner kills it one second later if it hangs.
+    static func invocation(
+        address: IPv4Address,
+        count: Int,
+        timeoutMilliseconds: Int
+    ) -> (arguments: [String], killAfter: TimeInterval) {
+        let count = min(max(count, 1), 5)
+        let wait = min(max(timeoutMilliseconds, 100), 5_000)
+        let deadline = Int((Double(count * wait) / 1_000).rounded(.up)) + 1
+        return (
+            ["-n", "-c", String(count), "-W", String(wait), "-t", String(deadline), address.description],
+            TimeInterval(deadline + 1)
+        )
     }
 
     package static func parse(_ output: String) -> PingProbeResult? {

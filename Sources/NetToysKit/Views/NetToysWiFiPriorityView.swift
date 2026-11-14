@@ -78,6 +78,7 @@ final class NetToysWiFiPriorityViewModel {
 struct NetToysWiFiPriorityView: View {
     @State private var model = NetToysWiFiPriorityViewModel()
     @State private var pendingRemoval: String?
+    @Environment(\.onePlusIsVisible) private var isVisible
 
     private var enabled: Binding<Bool> {
         Binding(get: { model.configuration.wifiPriority.isEnabled }, set: model.setEnabled)
@@ -97,7 +98,8 @@ struct NetToysWiFiPriorityView: View {
             prioritySection
             hotspotSection
         }
-        .task {
+        .task(id: isVisible) {
+            guard isVisible else { return }
             await model.refresh()
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -129,7 +131,7 @@ struct NetToysWiFiPriorityView: View {
                     .disabled(model.configuration.wifiPriority.ssids.count < 2)
             }
             OnePlusSettingRow("Failure duration", separator: false) {
-                OnePlusSelect(choices: [5, 10, 15, 30, 60].map { (TimeInterval($0), "\($0) seconds") },
+                OnePlusSelect(choices: [30, 45, 60].map { (TimeInterval($0), "\($0) seconds") },
                               selection: Binding(get: { model.configuration.wifiPriority.outageThreshold },
                                                  set: model.setThreshold), accessibilityLabel: "Failure duration")
                     .disabled(!model.configuration.wifiPriority.isEnabled)

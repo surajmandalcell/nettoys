@@ -58,77 +58,136 @@ public nonisolated enum SSHProcessRunner {
         timeout: TimeInterval
     ) async throws -> SSHProcessResult {
         guard maximumOutputBytes > 0 else { throw SSHKeyAccessError.outputLimit }
-        let worker = Task.detached(priority: .userInitiated) {
-            let process = Process()
-            let output = Pipe()
-            let error = Pipe()
-            let input = standardInput == nil ? nil : Pipe()
-            process.executableURL = executableURL
-            process.arguments = arguments
-            process.environment = environment
-            process.standardOutput = output
-            process.standardError = error
-            process.standardInput = input
-            do {
-                try process.run()
-            } catch {
-                throw SSHKeyAccessError.processLaunchFailed(error.localizedDescription)
-            }
-            let outputReader = Task.detached {
-                read(output.fileHandleForReading, maximumBytes: maximumOutputBytes, process: process)
-            }
-            let errorReader = Task.detached {
-                read(error.fileHandleForReading, maximumBytes: maximumOutputBytes, process: process)
-            }
-            if let standardInput, let input {
-                input.fileHandleForWriting.write(standardInput)
-                try? input.fileHandleForWriting.close()
-            }
-            let deadline = Date().addingTimeInterval(timeout)
-            while process.isRunning, !Task.isCancelled, Date() < deadline {
-                usleep(20_000)
-            }
-            let wasCancelled = Task.isCancelled
-            let timedOut = process.isRunning && Date() >= deadline
-            if process.isRunning {
-                process.terminate()
-                let killDeadline = Date().addingTimeInterval(2)
-                while process.isRunning, Date() < killDeadline {
-                    usleep(20_000)
-                }
-                if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
-            }
-            process.waitUntilExit()
-            let outputResult = await outputReader.value
-            let errorResult = await errorReader.value
-            if wasCancelled { throw CancellationError() }
-            if timedOut { throw SSHKeyAccessError.timeout }
-            if outputResult.exceeded || errorResult.exceeded { throw SSHKeyAccessError.outputLimit }
-            return SSHProcessResult(
-                status: process.terminationStatus,
-                standardOutput: String(decoding: outputResult.data, as: UTF8.self),
-                standardError: String(decoding: errorResult.data, as: UTF8.self)
-            )
-        }
+        let cancellation = ProcessCancellation()
+        // Blocking waits and pipe reads run on dispatch threads, never on the Swift cooperative pool.
         return try await withTaskCancellationHandler {
-            try await worker.value
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(with: Result {
+                        try runBlocking(
+                            executableURL: executableURL,
+                            arguments: arguments,
+                            environment: environment,
+                            standardInput: standardInput,
+                            maximumOutputBytes: maximumOutputBytes,
+                            timeout: timeout,
+                            cancellation: cancellation
+                        )
+                    })
+                }
+            }
         } onCancel: {
-            worker.cancel()
+            cancellation.cancel()
         }
     }
 
-    private static func read(_ handle: FileHandle, maximumBytes: Int, process: Process) -> (data: Data, exceeded: Bool) {
-        var data = Data()
-        var exceeded = false
-        while true {
-            let chunk = autoreleasepool { handle.readData(ofLength: 8_192) }
-            if chunk.isEmpty { break }
+    private static func runBlocking(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String],
+        standardInput: Data?,
+        maximumOutputBytes: Int,
+        timeout: TimeInterval,
+        cancellation: ProcessCancellation
+    ) throws -> SSHProcessResult {
+        let process = Process()
+        let output = Pipe()
+        let error = Pipe()
+        let input = standardInput == nil ? nil : Pipe()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.environment = environment
+        process.standardOutput = output
+        process.standardError = error
+        process.standardInput = input
+        do {
+            try process.run()
+        } catch {
+            throw SSHKeyAccessError.processLaunchFailed(error.localizedDescription)
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        let readerDeadline = deadline.addingTimeInterval(4)
+        let readers = DispatchGroup()
+        let outputCapture = PipeCapture()
+        let errorCapture = PipeCapture()
+        let outputHandle = output.fileHandleForReading
+        let errorHandle = error.fileHandleForReading
+        DispatchQueue.global(qos: .utility).async(group: readers) {
+            outputCapture.read(outputHandle, maximumBytes: maximumOutputBytes, process: process, deadline: readerDeadline)
+        }
+        DispatchQueue.global(qos: .utility).async(group: readers) {
+            errorCapture.read(errorHandle, maximumBytes: maximumOutputBytes, process: process, deadline: readerDeadline)
+        }
+        if let standardInput, let input {
+            let handle = input.fileHandleForWriting
+            // A child that exits before reading stdin must not kill this process with SIGPIPE.
+            _ = fcntl(handle.fileDescriptor, F_SETNOSIGPIPE, 1)
+            try? handle.write(contentsOf: standardInput)
+            try? handle.close()
+        }
+        while process.isRunning, !cancellation.isCancelled, Date() < deadline {
+            usleep(20_000)
+        }
+        let wasCancelled = cancellation.isCancelled
+        let timedOut = process.isRunning && Date() >= deadline
+        if process.isRunning {
+            process.terminate()
+            let killDeadline = Date().addingTimeInterval(2)
+            while process.isRunning, Date() < killDeadline {
+                usleep(20_000)
+            }
+            if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+        }
+        // waitUntilExit() can block forever when Foundation misses the child's exit.
+        let reapDeadline = Date().addingTimeInterval(2)
+        while process.isRunning, Date() < reapDeadline {
+            usleep(20_000)
+        }
+        readers.wait()
+        if wasCancelled { throw CancellationError() }
+        if timedOut || process.isRunning { throw SSHKeyAccessError.timeout }
+        if outputCapture.exceeded || errorCapture.exceeded { throw SSHKeyAccessError.outputLimit }
+        return SSHProcessResult(
+            status: process.terminationStatus,
+            standardOutput: String(decoding: outputCapture.data, as: UTF8.self),
+            standardError: String(decoding: errorCapture.data, as: UTF8.self)
+        )
+    }
+}
+
+private final nonisolated class ProcessCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+    func cancel() { lock.withLock { cancelled = true } }
+}
+
+/// Written only by its reader thread; read after the reader's DispatchGroup finishes.
+private final nonisolated class PipeCapture: @unchecked Sendable {
+    private(set) var data = Data()
+    private(set) var exceeded = false
+
+    // Poll with a deadline: a process launched elsewhere can inherit the write end and hold it open.
+    func read(_ handle: FileHandle, maximumBytes: Int, process: Process, deadline: Date) {
+        let descriptor = handle.fileDescriptor
+        var buffer = [UInt8](repeating: 0, count: 8_192)
+        var quietAfterExit = 0
+        while Date() < deadline {
+            var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            guard Darwin.poll(&event, 1, 100) > 0 else {
+                if process.isRunning { continue }
+                quietAfterExit += 1
+                if quietAfterExit >= 3 { break }
+                continue
+            }
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count <= 0 { break }
             let remaining = max(maximumBytes - data.count, 0)
-            data.append(chunk.prefix(remaining))
-            exceeded = exceeded || chunk.count > remaining
+            data.append(contentsOf: buffer.prefix(min(count, remaining)))
+            exceeded = exceeded || count > remaining
             if exceeded, process.isRunning { process.terminate() }
         }
-        return (data, exceeded)
     }
 }
 
@@ -662,11 +721,12 @@ public nonisolated struct WiFiPriorityConfiguration: Codable, Equatable, Sendabl
 
     public init(
         isEnabled: Bool = false,
-        outageThreshold: TimeInterval = 10,
+        outageThreshold: TimeInterval = 30,
         ssids: [String] = []
     ) {
         self.isEnabled = isEnabled
-        self.outageThreshold = min(max(outageThreshold, 5), 60)
+        // A shorter outage window let a brief probe failure drop a working network.
+        self.outageThreshold = min(max(outageThreshold, 30), 60)
         self.ssids = Array(
             ssids.compactMap(NetworkIdentity.normalizedSSID).uniqued().prefix(16)
         )
@@ -685,27 +745,37 @@ public nonisolated struct WiFiPriorityConfiguration: Codable, Equatable, Sendabl
 nonisolated struct WiFiFailoverMonitor: Sendable {
     private(set) var outageBeganAt: Date?
     private(set) var lastAttemptAt: Date?
+    private(set) var attempts = 0
 
+    /// An outage needs both a failed Internet probe and a gateway that does not answer.
+    static func isOutage(internet: NetworkReachability, gateway: NetworkReachability) -> Bool {
+        internet == .unreachable && gateway != .reachable
+    }
+
+    /// `maximumAttempts` stops rotation after one pass through the priority list.
     mutating func shouldAttempt(
         isFailure: Bool,
         threshold: TimeInterval,
+        maximumAttempts: Int = .max,
         at date: Date
     ) -> Bool {
         guard isFailure else {
             outageBeganAt = nil
             lastAttemptAt = nil
+            attempts = 0
             return false
         }
         guard let outageBeganAt else {
             self.outageBeganAt = date
             return false
         }
-        guard date.timeIntervalSince(outageBeganAt) >= threshold else { return false }
+        guard date.timeIntervalSince(outageBeganAt) >= threshold, attempts < maximumAttempts else { return false }
         return lastAttemptAt.map { date.timeIntervalSince($0) >= 30 } ?? true
     }
 
     mutating func didAttempt(at date: Date) {
         lastAttemptAt = date
+        attempts += 1
     }
 
     static func nextSSID(
@@ -1023,23 +1093,14 @@ public nonisolated struct DefaultRoute: Equatable, Sendable {
     }
 
     public static func load() async -> DefaultRoute? {
-        await Task.detached(priority: .utility) {
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/sbin/route")
-            process.arguments = ["-n", "get", "default"]
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                let data = output.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                guard process.terminationStatus == 0 else { return nil }
-                return parse(String(decoding: data, as: UTF8.self))
-            } catch {
-                return nil
-            }
-        }.value
+        guard let result = try? await SSHProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/sbin/route"),
+            arguments: ["-n", "get", "default"],
+            environment: ProcessInfo.processInfo.environment,
+            maximumOutputBytes: 65_536,
+            timeout: 5
+        ), result.status == 0 else { return nil }
+        return parse(result.standardOutput)
     }
 }
 
@@ -1120,6 +1181,15 @@ public nonisolated enum NetToysConfigurationStore {
             }
             return value
         }) ?? NetworkHistory()
+    }
+
+    /// Modification dates of the history and scan archive; an equal stamp means nothing to decode.
+    package static func historyStamp() -> [Date?] {
+        [NetToysPaths.history, NetToysPaths.scanHistory].map { modificationDate($0) }
+    }
+
+    static func modificationDate(_ url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
     package static func saveHistory(_ history: NetworkHistory) throws {

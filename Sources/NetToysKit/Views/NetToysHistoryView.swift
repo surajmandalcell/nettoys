@@ -42,10 +42,11 @@ nonisolated enum NetToysLocationAction: Equatable {
 @MainActor
 final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManagerDelegate {
     private struct Snapshot: Sendable {
-        let history: NetworkHistory
+        let history: NetworkHistory?
         let helperStatus: NetToysHelperStatus?
         let recordsHistory: Bool
-        let scanArchive: NetToysScanArchive
+        let scanArchive: NetToysScanArchive?
+        let stamp: [Date?]
     }
 
     private static let exportDateFormatter = ISO8601DateFormatter()
@@ -68,6 +69,7 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
     let host: NetToysHost
     @ObservationIgnored private let locationManager: CLLocationManager
     @ObservationIgnored private var refreshInProgress = false
+    @ObservationIgnored private var historyStamp: [Date?]?
 
     init(host: NetToysHost) {
         self.host = host
@@ -98,24 +100,30 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
         return NetworkSSID.isWiFi(interfaceName: interfaceName)
     }
 
-    func refresh() async {
+    /// A poll with `force == false` decodes history and the scan archive only after their files change.
+    func refresh(force: Bool = true) async {
         guard !refreshInProgress else { return }
         refreshInProgress = true
         defer { refreshInProgress = false }
 
+        let previousStamp = force ? nil : historyStamp
         let snapshot = await Task.detached(priority: .utility) {
-            Snapshot(
-                history: NetToysConfigurationStore.history(),
+            let stamp = NetToysConfigurationStore.historyStamp()
+            let changed = previousStamp != stamp
+            return Snapshot(
+                history: changed ? NetToysConfigurationStore.history() : nil,
                 helperStatus: NetToysConfigurationStore.status(),
                 recordsHistory: NetToysConfigurationStore.load().recordsNetworkHistory,
-                scanArchive: NetToysScannerStore.archive()
+                scanArchive: changed ? NetToysScannerStore.archive() : nil,
+                stamp: stamp
             )
         }.value
         guard !Task.isCancelled else { return }
-        history = snapshot.history
+        historyStamp = snapshot.stamp
+        if let value = snapshot.history { history = value }
         helperStatus = snapshot.helperStatus
         recordsHistory = snapshot.recordsHistory
-        scanArchive = snapshot.scanArchive
+        if let value = snapshot.scanArchive { scanArchive = value }
         locationAuthorizationStatus = locationManager.authorizationStatus
         isLoading = false
         await rebuildPresentation()
@@ -427,6 +435,7 @@ struct NetToysHistoryView: View {
     @State private var model: NetToysHistoryViewModel
     @State private var confirmClear = false
     @State private var searchFocus = 0
+    @Environment(\.onePlusIsVisible) private var isVisible
 
     init(host: NetToysHost) { _model = State(initialValue: NetToysHistoryViewModel(host: host)) }
 
@@ -460,10 +469,12 @@ struct NetToysHistoryView: View {
         .background {
             Button("") { searchFocus += 1 }.keyboardShortcut("f").hidden()
         }
-        .task {
+        .task(id: isVisible) {
+            guard isVisible else { return }
+            await model.refresh()
             while !Task.isCancelled {
-                await model.refresh()
                 do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                await model.refresh(force: false)
             }
         }
         .confirmationDialog("Clear network history?", isPresented: $confirmClear) {
