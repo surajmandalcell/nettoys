@@ -198,8 +198,8 @@ public struct NetToysMenuContent: View {
                     Spacer(minLength: OnePlusMenuMetrics.tileGap)
                     Button("Location access") { open(.settings) }
                         .buttonStyle(OnePlusButtonStyle(.link, size: .small, horizontalPadding: 0))
-                        .accessibilityLabel("Manage Wi-Fi Location access in NetToys")
-                        .help("Open NetToys Location status and recovery actions")
+                        .accessibilityLabel("Manage Wi-Fi Location access in Sam's NetToys")
+                        .help("Open Sam's NetToys Location status and recovery actions")
                 }
             }
             networkRow(identity.ssid == nil ? "Connection" : "Interface", symbol: snapshot.isWiFi ? "wifi" : "network",

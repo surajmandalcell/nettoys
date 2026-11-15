@@ -84,7 +84,7 @@ public final class NetToysLoginItemManager {
                    !NetToysProcessLock.isHeld() { return await setEnabled(true) }
                 try await Task.sleep(for: .milliseconds(250))
             }
-            errorMessage = "Open the other NetToys host and disable its helper, then try again."
+            errorMessage = "Open the other Sam's NetToys host and disable its helper, then try again."
         } catch { errorMessage = error.localizedDescription }
         return false
     }
@@ -113,18 +113,18 @@ public final class NetToysLoginItemManager {
             if Self.hasFreshHeartbeat(status, expectedSourceCommit: embeddedRevision) { return true }
         }
         if host == .standalone, !legacyHostIsLockAware() {
-            errorMessage = "Update MacPowerToys to the extracted NetToys build before enabling this helper. Disable its old helper first."
+            errorMessage = "Update MacPowerToys to the extracted Sam's NetToys build before enabling this helper. Disable its old helper first."
             return false
         }
         if NetToysProcessLock.isHeld(), status?.ownerBundleID != host.rawValue {
-            errorMessage = "Another NetToys helper owns monitoring. Use Take Over Helper while its parent app is open."
+            errorMessage = "Another Sam's NetToys helper owns monitoring. Use Take Over Helper while its parent app is open."
             return false
         }
         do {
             try await unregister()
             try service.register()
             if service.status == .requiresApproval {
-                errorMessage = "Allow NetToys Helper in System Settings to enable monitoring."
+                errorMessage = "Allow Sam's NetToys Helper in System Settings to enable monitoring."
                 SMAppService.openSystemSettingsLoginItems()
             } else if service.status == .enabled {
                 for _ in 0..<32 {
@@ -135,8 +135,8 @@ public final class NetToysLoginItemManager {
                     }
                     try await Task.sleep(for: .milliseconds(250))
                 }
-                errorMessage = "NetToys Helper did not start. Check Background App Activity."
-            } else { errorMessage = "macOS did not enable NetToys Helper." }
+                errorMessage = "Sam's NetToys Helper did not start. Check Background App Activity."
+            } else { errorMessage = "macOS did not enable Sam's NetToys Helper." }
             try await unregister()
         } catch { errorMessage = error.localizedDescription; try? await unregister() }
         return false

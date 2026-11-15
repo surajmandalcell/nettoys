@@ -243,7 +243,7 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
 
     func export() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "NetToys Network History.csv"
+        panel.nameFieldStringValue = "Sam's NetToys Network History.csv"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let rows = visibleEventRows.map(\.event).map { event in
             [
@@ -264,7 +264,7 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
     func export(_ run: NetToysScanRun) {
         guard !isExporting else { return }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "NetToys Scan \(run.date.formatted(.iso8601)).csv"
+        panel.nameFieldStringValue = "Sam's NetToys Scan \(run.date.formatted(.iso8601)).csv"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         isExporting = true
         Task { [weak self] in
@@ -693,10 +693,10 @@ struct NetToysHistoryView: View {
               snapshot.networkID != "disconnected"
         else { return nil }
         if model.helperStatus?.ssidAccess == .notDetermined {
-            return "NetToys Helper is waiting for its Location permission. Respond to the macOS prompt or open Location Settings."
+            return "Sam's NetToys Helper is waiting for its Location permission. Respond to the macOS prompt or open Location Settings."
         }
         if model.helperStatus?.ssidAccess == .denied || model.helperStatus?.ssidAccess == .restricted {
-            return "Allow NetToys Helper in Location Services so background history can record Wi-Fi names."
+            return "Allow Sam's NetToys Helper in Location Services so background history can record Wi-Fi names."
         }
         if model.locationRequestFailed {
             return "macOS blocked the Location request. Open Location Services to allow \(model.host.displayName)."
@@ -748,13 +748,13 @@ public struct NetToysSettingsView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: OnePlusMetrics.cardGap) {
-            OnePlusSettingRow("NetToys Helper", help: "Keep SSH Anchor, Wi-Fi failover, and network history available.", separator: false) {
+            OnePlusSettingRow("Sam's NetToys Helper", help: "Keep SSH Anchor, Wi-Fi failover, and network history available.", separator: false) {
                 HStack(spacing: OnePlusMetrics.actionSpacing) {
                     if model.isLoading {
                         ProgressView().controlSize(.small).accessibilityLabel("Loading network settings")
                             .accessibilityIdentifier("nettoys.settings-loading")
                     }
-                    Toggle("Enable NetToys", isOn: $enabled)
+                    Toggle("Enable Sam's NetToys", isOn: $enabled)
                         .labelsHidden().toggleStyle(OnePlusSwitchStyle())
                         .disabled(isTransitioning)
                 }
@@ -917,13 +917,13 @@ public struct NetToysSettingsView: View {
 
     private var locationStatusMessage: String {
         if model.helperStatus?.ssidAccess == .notDetermined {
-            return "NetToys Helper is waiting for its Location permission so it can record SSIDs in the background."
+            return "Sam's NetToys Helper is waiting for its Location permission so it can record SSIDs in the background."
         }
         if model.helperStatus?.ssidAccess == .denied || model.helperStatus?.ssidAccess == .restricted {
-            return "Enable NetToys Helper in Privacy & Security > Location Services to record SSIDs in the background."
+            return "Enable Sam's NetToys Helper in Privacy & Security > Location Services to record SSIDs in the background."
         }
         if model.helperSSIDUnavailable {
-            return "Location access is allowed, but NetToys Helper could not read the current Wi-Fi name. Check Location Services and try again."
+            return "Location access is allowed, but Sam's NetToys Helper could not read the current Wi-Fi name. Check Location Services and try again."
         }
         if model.locationRequestFailed {
             return "macOS blocked the Location request. Open Privacy & Security > Location Services and allow \(host.displayName)."

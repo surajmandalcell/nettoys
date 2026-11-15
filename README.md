@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="Assets/NetToysLogo.png" width="128" height="128" alt="NetToys app icon">
+  <img src="Assets/NetToysLogo.png" width="128" height="128" alt="Sam's NetToys app icon">
 </p>
 
-<h1 align="center">NetToys</h1>
+<h1 align="center">Sam's NetToys</h1>
 
 <p align="center">
   Scan your network, keep SSH hosts reachable when their address changes,<br>
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/surajmandalcell/nettoys/releases/latest">Download for macOS</a> · Apple Silicon · macOS 15+ · Also built into <a href="https://github.com/surajmandalcell/macpowertoys">MacPowerToys</a> · MIT
+  <a href="https://github.com/surajmandalcell/nettoys/releases/latest">Download for macOS</a> · Apple Silicon · macOS 15+ · MIT
 </p>
 
 ## What it does
@@ -20,12 +20,12 @@
   HTTP servers, and MAC vendors. Sort, filter, search, comment, mark favorites,
   and export to six formats.
 - **SSH Anchor.** Keep an SSH host reachable when DHCP gives it a new address.
-  NetToys checks the port every few seconds. When the host moves, it finds the
+  Sam's NetToys checks the port every few seconds. When the host moves, it finds the
   host again by MAC address or host name and changes only that host's
   `HostName` line in `~/.ssh/config`. It verifies the new address first, keeps a
   backup, and can fall back to Tailscale while the local address is down.
 - **Wi-Fi Priority.** Put your saved networks in order. When the current network
-  stops working for a time you choose, NetToys joins the next one. Your iPhone
+  stops working for a time you choose, Sam's NetToys joins the next one. Your iPhone
   hotspot stays the last fallback.
 - **Network History.** See uptime and every outage for each Wi-Fi network, with
   the exact time and length of each one.
@@ -41,7 +41,7 @@
 2. Allow **Local Network** access when you first scan. Allow **Location** if you
    want Wi-Fi names; macOS hides network names without it.
 3. Turn on monitoring in **Settings**. macOS asks you once to approve the
-   NetToys helper in **System Settings → General → Login Items**. The helper
+   Sam's NetToys helper in **System Settings → General → Login Items**. The helper
    runs SSH Anchor, Wi-Fi Priority, and Network History while the app is closed.
 
 Settings shows the state of each permission and a button that opens the right
@@ -57,18 +57,15 @@ nettoys://open/history
 nettoys://open/settings
 ```
 
-## Use it inside MacPowerToys
+## Data
 
-MacPowerToys embeds the same NetToys package, so both apps show the same pages,
-settings, and data. Data lives in
-`~/Library/Application Support/MacPowerToys/NetToys`. Both apps can share one
-signed helper. **Take Over Helper** in Settings moves it between apps without
-launching the other app.
+Settings and history live in
+`~/Library/Application Support/MacPowerToys/NetToys`.
 
 ## Limits
 
 - Scanning and SSH Anchor support IPv4 only.
-- macOS starts Instant Hotspot itself. NetToys can only put it last in the
+- macOS starts Instant Hotspot itself. Sam's NetToys can only put it last in the
   order; it cannot connect to it.
 - Neighbor MAC addresses need the approved helper. Without it, macOS hides them.
 - Angry IP Scanner plugins are not supported. Use the built-in custom fetchers

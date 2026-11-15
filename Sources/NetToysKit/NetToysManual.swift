@@ -18,7 +18,7 @@ public enum NetToysManual {
         ]),
         NetToysManualSection(title: "Network History", points: [
             "Network History records gateway and internet state changes.",
-            "The bundled NetToys Helper runs while either host requests monitoring."
+            "The bundled Sam's NetToys Helper runs while either host requests monitoring."
         ])
     ]
 }

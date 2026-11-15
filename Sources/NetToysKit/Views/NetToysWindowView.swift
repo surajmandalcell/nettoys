@@ -178,7 +178,7 @@ public struct NetToysWindowView: View {
     }
 
     private var sidebar: some View {
-        OnePlusSidebar(title: "NetToys") {
+        OnePlusSidebar(title: "Sam's NetToys") {
             OnePlusNavCaption("Tools")
             ForEach(Array(NetToysPage.allCases.prefix(4))) { item in
                 OnePlusNavRow(item.rawValue, systemImage: item.icon, selected: page == item) {

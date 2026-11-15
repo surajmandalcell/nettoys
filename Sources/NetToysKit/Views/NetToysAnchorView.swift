@@ -181,7 +181,7 @@ final class NetToysAnchorViewModel {
                 savedConfiguration = configuration
                 guard await host.loginItems.setEnabled(true) else {
                     errorMessage = host.loginItems.errorMessage
-                        ?? "The NetToys helper could not be enabled."
+                        ?? "The Sam's NetToys helper could not be enabled."
                     return
                 }
                 await refresh()

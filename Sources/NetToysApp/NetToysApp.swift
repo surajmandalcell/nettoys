@@ -26,7 +26,7 @@ struct NetToysApp: App {
     }
 
     var body: some Scene {
-        Window("NetToys", id: "nettoys") {
+        Window("Sam's NetToys", id: "nettoys") {
             OnePlusWindowContent {
                 NetToysWindowView(host: host, page: $page, enabled: enablement, isTransitioning: transitioning) {
                     defer { prefill = nil }
