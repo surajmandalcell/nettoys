@@ -16,7 +16,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "NetToysCore", resources: [.process("Resources")]),
-        .target(name: "NetToysKit", dependencies: ["NetToysCore", .product(name: "OnePlusUI", package: "oneplus-ui")]),
+        .target(name: "NetToysKit", dependencies: ["NetToysCore", .product(name: "OnePlusUI", package: "oneplus-ui")],
+                resources: [.copy("Resources/NetToysGlyph.svg")]),
         .executableTarget(name: "NetToysApp", dependencies: ["NetToysCore", "NetToysKit", .product(name: "OnePlusUI", package: "oneplus-ui")]),
         .executableTarget(name: "NetToysHelper", dependencies: ["NetToysCore"]),
         .target(name: "NetToysLockFixture", path: "Tests/Fixtures/LockProcess"),
