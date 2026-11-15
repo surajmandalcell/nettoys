@@ -35,10 +35,9 @@ struct NetToysApp: App {
                 .background(NetToysWindowRestore())
             }
             .onOpenURL { url in
-                guard url.scheme == "nettoys", url.host == "open",
-                      let destination = NetToysPage.allCases.first(where: { $0.pageID == url.lastPathComponent }) else { return }
-                page = destination
-                prefill = NetToysScanPrefill.parse(url, schemes: ["nettoys"], toolPath: nil)
+                guard let route = NetToysRoute(url) else { return }
+                if let destination = route.page { page = destination }
+                prefill = route.prefill
                 if let prefill { NotificationCenter.default.post(name: .netToysPrefill, object: prefill) }
             }
             .task { if enabled { enabled = await host.loginItems.setEnabled(true) } }
@@ -47,19 +46,30 @@ struct NetToysApp: App {
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
 
-        MenuBarExtra("NetToys", systemImage: "network") {
+        MenuBarExtra {
             OnePlusMenuPanel {
-                Text("NetToys")
+                Text("Sam's NetToys")
             } actions: {
-                Button("Open NetToys") { openWindow(id: "nettoys") }
+                Button("Open Sam's NetToys") { openMainWindow() }
             } content: {
                 NetToysMenuContent(snapshot: $menuSnapshot, host: host) { destination in
                     page = destination
-                    openWindow(id: "nettoys")
+                    openMainWindow()
                 }
             }
+        } label: {
+            Group {
+                if let glyph = NetToysGlyph.menuBarImage { Image(nsImage: glyph) } else { Image(systemName: "network") }
+            }
+            .accessibilityLabel("Sam's NetToys")
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// The menu panel brings the window forward, as the MacPowerToys tray did.
+    private func openMainWindow() {
+        openWindow(id: "nettoys")
+        NSApp.activate()
     }
 }
 
