@@ -11,11 +11,7 @@ version history).
   and Tools (SSH Anchor, Wi-Fi Priority, History). No "Kinds" group, and
   no "New" sidebar item or in-window new-device banner; new devices are
   announced by a macOS notification only.
-- Main window: sidebar, with an inspector that opens on demand.
-- Menu bar panel: the "State headline" variant of "Status and actions".
-  Pause all actions is a large play/pause button at the top right. During
-  an outage it says which priority network it is joining next. The bottom
-  button stays "Open Sam's NetToys".
+- Main window: sidebar; device details open in a centered modal.
 - Panel layout: "Headline with auto-join". During an outage it shows
   "Joining <next network> in 45 sec" with Join Now and Stay on <current>.
   Action buttons: Run Speed Test and Copy IP Address only.
