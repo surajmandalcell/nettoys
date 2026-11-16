@@ -172,6 +172,16 @@ final class NetToysGuardrailTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(NetToysScanArchive.self, from: Data(contentsOf: url)).runs.count, 1)
     }
 
+    func testScanWidthStartsAt64RisesTo256AndBacksOffWhenTimeoutsRise() {
+        var width = AdaptiveConcurrency(ceiling: 256)
+        XCTAssertEqual(width.limit, 64)
+        for _ in 0..<20 { for _ in 0..<width.limit { width.record(timedOut: false) } }
+        XCTAssertEqual(width.limit, 256)
+        for _ in 0..<width.limit { width.record(timedOut: true) }
+        XCTAssertEqual(width.limit, 128)
+        XCTAssertEqual(AdaptiveConcurrency(ceiling: 1).limit, 1)
+    }
+
     func testWiFiSwitchWaitsAfterWakeRestsAfterSwitchAndIgnoresLeaving() {
         var monitor = WiFiFailoverMonitor()
         // Outage on the joined network for 30 s: switch.

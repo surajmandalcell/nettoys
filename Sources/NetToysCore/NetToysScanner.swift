@@ -243,6 +243,38 @@ public nonisolated enum NetToysLivenessMethod: String, Codable, CaseIterable, Id
     public var id: String { rawValue }
 }
 
+/// Probes in flight: start at 64, widen by 32 per round while the share of silent hosts holds steady,
+/// halve when it rises. The limits are the Mac's (sockets, Wi-Fi airtime), not a fixed packet cap.
+nonisolated struct AdaptiveConcurrency: Sendable {
+    static let start = 64
+    static let floor = 16
+    let ceiling: Int
+    private(set) var limit: Int
+    private var done = 0
+    private var timeouts = 0
+    private var previousShare: Double?
+
+    init(ceiling: Int) {
+        self.ceiling = max(ceiling, 1)
+        limit = min(Self.start, self.ceiling)
+    }
+
+    mutating func record(timedOut: Bool) {
+        done += 1
+        if timedOut { timeouts += 1 }
+        guard done >= limit else { return }
+        let share = Double(timeouts) / Double(done)
+        if let previousShare, share > previousShare + 0.1 {
+            limit = max(min(Self.floor, ceiling), limit / 2)
+        } else {
+            limit = min(ceiling, limit + 32)
+        }
+        previousShare = share
+        done = 0
+        timeouts = 0
+    }
+}
+
 /// A counting semaphore that bounds concurrent subprocesses for async callers.
 actor ProcessGate {
     private var available: Int
@@ -1056,7 +1088,7 @@ package actor NetToysScanner {
         targets: [IPv4Address],
         ports: [UInt16],
         timeoutMilliseconds: Int = 750,
-        concurrency: Int = 64,
+        concurrency: Int = 256,
         collectPingDetails: Bool = false,
         pingProbeCount: Int = 2,
         livenessMethod: NetToysLivenessMethod = .tcp,
@@ -1088,7 +1120,8 @@ package actor NetToysScanner {
     package func scan(
         targets: [NetToysScanTarget],
         timeoutMilliseconds: Int = 750,
-        concurrency: Int = 64,
+        /// The most probes in flight; the scan starts at 64 and adapts up to this.
+        concurrency: Int = 256,
         collectPingDetails: Bool = false,
         pingProbeCount: Int = 2,
         livenessMethod: NetToysLivenessMethod = .tcp,
@@ -1100,25 +1133,27 @@ package actor NetToysScanner {
         progress: (@Sendable (Int, Int) -> Void)? = nil,
         update: (@Sendable (NetToysScanResult) -> Void)? = nil
     ) async -> [NetToysScanResult] {
-        let maximum = min(max(concurrency, 1), 256)
         let activeNetwork = LocalIPv4Network.active()
         let localDNSServer = await Self.localDNSServer(in: activeNetwork)
         if let localDNSServer { await Self.waitForLocalNetworkAccess(gateway: localDNSServer) }
         var scanned: [NetToysScanResult] = []
         scanned.reserveCapacity(targets.count)
         var completed = 0
-        for offset in stride(from: 0, to: targets.count, by: maximum) {
-            if Task.isCancelled { break }
-            let batch = targets[offset..<min(offset + maximum, targets.count)]
-            let results = await withTaskGroup(of: NetToysScanResult?.self) { group in
-                for (index, target) in batch.enumerated() {
+        // A sliding window whose width follows the timeout share, instead of fixed batches.
+        var width = AdaptiveConcurrency(ceiling: concurrency)
+        await withTaskGroup(of: NetToysScanResult?.self) { group in
+            var next = 0
+            var inFlight = 0
+            func launch() async {
+                while inFlight < width.limit, next < targets.count, !Task.isCancelled {
+                    if launchDelayMilliseconds > 0, next > 0 {
+                        try? await Task.sleep(for: .milliseconds(min(1_000, launchDelayMilliseconds)))
+                    }
+                    let target = targets[next]
+                    next += 1
+                    inFlight += 1
                     group.addTask {
                         guard !Task.isCancelled else { return nil }
-                        if launchDelayMilliseconds > 0, index > 0 {
-                            try? await Task.sleep(for: .milliseconds(
-                                min(1_000, launchDelayMilliseconds) * index
-                            ))
-                        }
                         return await Self.scanHost(
                             target.address,
                             ports: target.ports,
@@ -1135,15 +1170,16 @@ package actor NetToysScanner {
                         )
                     }
                 }
-                var values: [NetToysScanResult] = []
-                for await value in group {
-                    if let value { values.append(value) }
-                    completed += 1
-                    progress?(completed, targets.count)
-                }
-                return values
             }
-            scanned.append(contentsOf: results)
+            await launch()
+            while let value = await group.next() {
+                inFlight -= 1
+                if let value { scanned.append(value) }
+                width.record(timedOut: value?.isReachable != true)
+                completed += 1
+                progress?(completed, targets.count)
+                await launch()
+            }
         }
         // A local host that answered ARP is alive even when every probed port is closed.
         let neighborCandidates = scanned.filter {
