@@ -11,8 +11,15 @@ panel details are still open (redesign in progress).
   no "New" sidebar item or in-window new-device banner; new devices are
   announced by a macOS notification only.
 - Main window: sidebar, with an inspector that opens on demand.
-- Menu bar panel: "Status and actions" (network header, latency graph,
-  status rows, action buttons, Pause all actions).
+- Menu bar panel: the "State headline" variant of "Status and actions".
+  Pause all actions is a large play/pause button at the top right. During
+  an outage it says which priority network it is joining next. The bottom
+  button stays "Open Sam's NetToys".
+- Look: "Dense pro" polish.
+- Durations: full hours, "min", "sec", for example "1 hour 52 min".
+- Motion: hover fades in, selection is instant. The menu panel grows from
+  its menu bar icon. Pause all actions shows a note and dims the actions.
+  All motion is fast and responsive.
 
 ## Features
 
