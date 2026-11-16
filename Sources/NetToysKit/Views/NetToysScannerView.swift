@@ -122,7 +122,8 @@ final class NetToysScannerViewModel {
     var isImporting = false
     var isExporting = false
     var timeoutMilliseconds = 750
-    var concurrency = 64
+    /// A ceiling: the scan starts lower and adapts to timeouts.
+    var concurrency = 256
     var launchDelayMilliseconds = 0
     var collectPingDetails = false
     var pingProbeCount = 2
@@ -784,7 +785,7 @@ struct NetToysScannerSettingsView: View {
         VStack(alignment: .leading, spacing: OnePlusMetrics.cardGap) {
                     settingsSection("Scan Engine") {
                         stepper("TCP timeout", value: $model.timeoutMilliseconds, range: 100...5_000, step: 100, unit: "ms")
-                        stepper("Parallel connections", value: $model.concurrency, range: 1...256)
+                        stepper("Max parallel connections", value: $model.concurrency, range: 1...256)
                         stepper("Launch delay", value: $model.launchDelayMilliseconds, range: 0...100, step: 5, unit: "ms")
                     }
 
