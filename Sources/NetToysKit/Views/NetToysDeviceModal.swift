@@ -16,7 +16,8 @@ struct NetToysDeviceModal: View {
                 content(result)
                 ScrollView { content(result) }.scrollIndicators(.automatic)
             }
-            .frame(width: 440)
+            // 480 pt fits the three labeled buttons and "..." with 8 pt gaps inside the 20 pt insets.
+            .frame(width: 480)
             .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(Dense.modal))
             .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(Dense.stroke, lineWidth: 0.5))
             .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
@@ -88,7 +89,7 @@ struct NetToysDeviceModal: View {
     }
 
     private func actions(_ result: NetToysScanResult) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             // stub: Wake-on-LAN is not built yet; the button stays disabled until it is.
             Button {} label: { Label("Wake Device", systemImage: "power") }
                 .disabled(true).help("Wake-on-LAN comes in a later version.")
@@ -97,7 +98,7 @@ struct NetToysDeviceModal: View {
             Button { NetToysDeviceActions.copy(result.address.description) } label: {
                 Label("Copy IP Address", systemImage: "doc.on.doc")
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
             Menu {
                 Button("Add to SSH Anchor") {
                     NetToysDeviceActions.addToAnchor(result)

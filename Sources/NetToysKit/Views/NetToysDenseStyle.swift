@@ -57,6 +57,7 @@ struct DenseCapsuleButtonStyle: ButtonStyle {
             .labelStyle(DenseLabelStyle())
             .padding(.horizontal, 11)
             .frame(minWidth: 26, minHeight: 26)
+            .fixedSize()
             .background(Capsule().fill(prominent ? Dense.accent : Dense.button))
             .overlay(Capsule().strokeBorder(prominent ? Color.clear : Dense.buttonStroke, lineWidth: 0.5))
             .shadow(color: .black.opacity(prominent ? 0 : 0.05), radius: 0.5, y: 0.5)
