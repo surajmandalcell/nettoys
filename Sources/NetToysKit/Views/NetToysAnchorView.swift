@@ -39,6 +39,7 @@ final class NetToysAnchorViewModel {
         let entries: [SSHConfigEntry]
         let configuration: NetToysConfiguration
         let helperStatus: NetToysHelperStatus?
+        let backups: [NetToysSSHBackup]
     }
 
     var entries: [SSHConfigEntry] = []
@@ -48,6 +49,7 @@ final class NetToysAnchorViewModel {
     var deviceHostname = ""
     var configuration = NetToysConfiguration()
     var helperStatus: NetToysHelperStatus?
+    var backups: [NetToysSSHBackup] = []
     var errorMessage: String?
     var isInspecting = false
     var requestedAddress: String?
@@ -93,11 +95,13 @@ final class NetToysAnchorViewModel {
             return Snapshot(
                 entries: entries,
                 configuration: NetToysConfigurationStore.load(),
-                helperStatus: NetToysConfigurationStore.status()
+                helperStatus: NetToysConfigurationStore.status(),
+                backups: NetToysSSHBackups.list(in: NetToysRuntimePaths.standard.backups)
             )
         }.value
         guard !Task.isCancelled else { return }
         entries = snapshot.entries
+        backups = snapshot.backups
         configuration = snapshot.configuration
         savedConfiguration = snapshot.configuration
         helperStatus = snapshot.helperStatus
@@ -326,9 +330,14 @@ final class NetToysAnchorViewModel {
         save()
     }
 
-    func setProbeInterval(_ value: TimeInterval) {
-        configuration.probeInterval = min(max(value, 2), 3)
-        save()
+    func restore(_ backup: NetToysSSHBackup) {
+        let paths = NetToysRuntimePaths.standard
+        do {
+            try NetToysSSHBackups.restore(backup, configURL: paths.sshConfig, backupDirectory: paths.backups)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        Task { await refresh() }
     }
 
     func status(for id: UUID) -> SSHAnchorStatus? {
@@ -468,12 +477,13 @@ final class NetToysAnchorViewModel {
 struct NetToysAnchorView: View {
     @State private var model: NetToysAnchorViewModel
     @State private var pendingRemoval: UUID?
+    @State private var tab = "anchors"
     @Environment(\.onePlusIsVisible) private var isVisible
 
     init(host: NetToysHost) { _model = State(initialValue: NetToysAnchorViewModel(host: host)) }
 
     var body: some View {
-        OnePlusPage(scrolls: false) {
+        OnePlusPage(scrolls: tab == "backups") {
             OnePlusPageHeader(
                 title: "SSH Anchor",
                 subtitle: "Keep SSH aliases attached to local devices"
@@ -491,11 +501,18 @@ struct NetToysAnchorView: View {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
             }
-
+        } tabs: {
+            OnePlusTabStrip(tabs: [OnePlusTab("anchors", "Anchors"),
+                                   OnePlusTab("backups", "Backups", count: model.backups.count)],
+                            selection: $tab)
         } content: {
-            helperCard
-            addAnchorSection
-            anchorsSection
+            if tab == "backups" {
+                NetToysSSHBackupList(backups: model.backups, restore: model.restore)
+            } else {
+                helperCard
+                addAnchorSection
+                anchorsSection
+            }
         }
         .task(id: isVisible) {
             guard isVisible else { return }
@@ -552,24 +569,16 @@ struct NetToysAnchorView: View {
                       state: model.helperIsHealthy ? .online : .offline)
     }
 
-    private var helperCard: some View {
-        VStack(spacing: OnePlusMetrics.cardGap) {
-            if !model.helperIsHealthy {
-                OnePlusBanner("Monitoring is off. Turn it on to watch your saved anchors.", tone: .warning) {
-                    Button("Turn On Monitoring") {
-                        Task {
-                            _ = await model.host.loginItems.setEnabled(true)
-                            await model.refresh()
-                        }
+    @ViewBuilder private var helperCard: some View {
+        if !model.helperIsHealthy {
+            OnePlusBanner("Monitoring is off. Turn it on to watch your saved anchors.", tone: .warning) {
+                Button("Turn On Monitoring") {
+                    Task {
+                        _ = await model.host.loginItems.setEnabled(true)
+                        await model.refresh()
                     }
                 }
             }
-            OnePlusSettingRow("Check interval", help: "Each anchor checks its saved SSH port.", separator: false) {
-                OnePlusSelect(choices: [(2.0, "2 seconds"), (2.5, "2.5 seconds"), (3.0, "3 seconds")],
-                              selection: Binding(get: { model.configuration.probeInterval }, set: model.setProbeInterval),
-                              accessibilityLabel: "Check interval")
-            }
-            .environment(\.onePlusCardPadding, 0)
         }
     }
 
