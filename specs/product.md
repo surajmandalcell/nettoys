@@ -25,8 +25,12 @@ panel details are still open (redesign in progress).
   Copy IP Address) and a "..." menu (Add to SSH Anchor, Copy MAC Address,
   Forget Device). Sections: Details, Open ports (watch switches),
   Latency (average first, 24 hours), Alerts, Comment.
-- Panel buttons: compact push buttons like "Open Sam's NetToys", not
-  cards (exact style open).
+- Panel bottom: Wi-Fi-menu-style rows with round icon wells. "Run Speed
+  Test" runs inside its row (progress ring, live "Download 286 Mbps",
+  Stop); when idle it shows the last result, such as "Last 412 Mbps".
+  "Copy IP Address" shows the address as its value. Then menu rows "Open
+  Sam's NetToys" (⌘O) and "Settings…" (⌘,). One content edge, nested
+  corners, a material surface, 0.5 pt hairlines.
 - Look: "Dense pro" polish.
 - Durations: full hours, "min", "sec", for example "1 hour 52 min".
 - Motion: hover fades in, selection is instant. The menu panel grows from
