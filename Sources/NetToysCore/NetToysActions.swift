@@ -6,6 +6,7 @@ public nonisolated enum NetToysActionKind: String, Codable, Sendable {
     case wifiJoin
     case undo
     case safeMode
+    case wake
 }
 
 public nonisolated enum NetToysActionOutcome: String, Codable, Sendable {

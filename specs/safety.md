@@ -19,7 +19,10 @@ Docker lab.
   low, back off when they rise. No fixed packet rate cap. The limits are the
   Mac's (open sockets, Wi-Fi airtime), not the router's.
 - Cap scan memory and the scan archive by size, not only by run count.
-  The archive cap is 8 MB.
+  The archive cap is 8 MB. A running scan keeps 16 MB of results; past
+  that it drops addresses that did not answer and keeps every device.
+- Latency history (gateway and devices, from checks and scans): 24 hours,
+  512 KB cap, oldest first, in `latency.json`.
 - Background network check every 30 s, every 60 s on battery. SSH Anchor
   probe every 5 s.
 

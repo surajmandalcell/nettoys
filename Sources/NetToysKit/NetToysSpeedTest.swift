@@ -1,19 +1,6 @@
 import Foundation
 import Observation
 
-/// Durations as the product writes them: full hours, then min, then sec ("1 hour 52 min", "45 sec").
-nonisolated enum NetToysDuration {
-    static func text(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds))
-        let hours = total / 3600, minutes = total % 3600 / 60
-        if hours > 0 {
-            let unit = hours == 1 ? "hour" : "hours"
-            return minutes > 0 ? "\(hours) \(unit) \(minutes) min" : "\(hours) \(unit)"
-        }
-        return minutes > 0 ? "\(minutes) min" : "\(total) sec"
-    }
-}
-
 /// Runs macOS `networkQuality` for a download test and keeps the last result.
 @Observable
 @MainActor

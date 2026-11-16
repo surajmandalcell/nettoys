@@ -838,6 +838,10 @@ nonisolated struct WiFiFailoverMonitor: Sendable {
     private(set) var holdUntil: TimeInterval = 0
     private var lastSSID: String?
     private var switchedTo: String?
+    /// Join Now from the panel: skip the outage wait, but never the wake wait or the cooldown.
+    private(set) var joinNowRequested = false
+    /// Stay from the panel: no switch until this outage ends.
+    private(set) var staying = false
 
     /// An outage needs both a failed Internet probe and a gateway that does not answer.
     static func isOutage(internet: NetworkReachability, gateway: NetworkReachability) -> Bool {
@@ -861,12 +865,31 @@ nonisolated struct WiFiFailoverMonitor: Sendable {
             resetOutage()
             return false
         }
-        guard let outageBeganAt else {
-            self.outageBeganAt = now
-            return false
+        let began = outageBeganAt ?? now
+        outageBeganAt = began
+        guard !staying, now >= holdUntil, attempts < maximumAttempts else { return false }
+        if joinNowRequested {
+            joinNowRequested = false
+            return true
         }
-        guard now >= holdUntil, now - outageBeganAt >= threshold, attempts < maximumAttempts else { return false }
+        guard now - began >= threshold else { return false }
         return lastAttemptAt.map { now - $0 >= 30 } ?? true
+    }
+
+    mutating func requestJoinNow() {
+        joinNowRequested = true
+        staying = false
+    }
+
+    mutating func stay() {
+        staying = true
+        joinNowRequested = false
+    }
+
+    /// Monotonic time of the next automatic attempt in this outage, for the panel countdown.
+    func nextAttempt(threshold: TimeInterval) -> TimeInterval? {
+        guard let outageBeganAt, !staying else { return nil }
+        return max(outageBeganAt + threshold, holdUntil, (lastAttemptAt ?? -.infinity) + 30)
     }
 
     mutating func didAttempt(at now: TimeInterval) {
@@ -894,6 +917,8 @@ nonisolated struct WiFiFailoverMonitor: Sendable {
         outageBeganAt = nil
         lastAttemptAt = nil
         attempts = 0
+        joinNowRequested = false
+        staying = false
     }
 
     static func nextSSID(
@@ -1008,12 +1033,15 @@ public nonisolated struct NetToysHelperStatus: Codable, Equatable, Sendable {
     public var packageVersion: String?
     /// Running, warning(count), paused, or failed(reason), for the System row.
     public var system: NetToysSystemHealth?
+    public var dns: NetToysDNSCheck?
 
     public init(version: Int, heartbeat: Date, anchors: [SSHAnchorStatus], network: NetworkRuntimeSnapshot? = nil,
                 sourceCommit: String? = nil, ssidAccess: NetToysSSIDAccessState? = nil,
                 wifiFailover: WiFiFailoverStatus? = nil, ownerBundleID: String? = nil,
-                ownerPID: Int32? = nil, packageVersion: String? = nil, system: NetToysSystemHealth? = nil) {
+                ownerPID: Int32? = nil, packageVersion: String? = nil, system: NetToysSystemHealth? = nil,
+                dns: NetToysDNSCheck? = nil) {
         self.system = system
+        self.dns = dns
         self.version = version
         self.heartbeat = heartbeat
         self.anchors = anchors
@@ -1045,6 +1073,9 @@ public nonisolated struct WiFiFailoverStatus: Codable, Equatable, Sendable {
     public let state: WiFiFailoverState
     public let message: String
     public let updatedAt: Date
+    /// While waiting in an outage: the network the next attempt joins, and when.
+    public var next: String?
+    public var joinAt: Date?
 }
 
 public nonisolated struct NetworkRuntimeSnapshot: Codable, Equatable, Sendable {

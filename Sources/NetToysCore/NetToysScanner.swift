@@ -1023,6 +1023,15 @@ package nonisolated enum NetToysScannerStore {
             try data.write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
+        // A finished scan also feeds the latency history and announces MAC addresses never seen before.
+        let directory = url.deletingLastPathComponent()
+        let samples = run.results.reduce(into: [String: [NetToysLatencySample]]()) { samples, result in
+            guard result.isReachable, let milliseconds = result.responseMilliseconds else { return }
+            samples[result.id] = [NetToysLatencySample(date: run.date, milliseconds: milliseconds)]
+        }
+        try? NetToysLatencyStore.append(samples, to: directory.appendingPathComponent("latency.json"))
+        let found = (try? NetToysKnownDevices.newDevices(run.results, at: directory.appendingPathComponent("known-devices.json"))) ?? []
+        NetToysKnownDevices.alert(for: found).map(NetToysNotifier.post)
     }
 
     package static func clearArchive() throws {
@@ -1137,7 +1146,12 @@ package actor NetToysScanner {
         let localDNSServer = await Self.localDNSServer(in: activeNetwork)
         if let localDNSServer { await Self.waitForLocalNetworkAccess(gateway: localDNSServer) }
         var scanned: [NetToysScanResult] = []
-        scanned.reserveCapacity(targets.count)
+        let budget = NetToysScanBudget()
+        let capped: (@Sendable (NetToysScanResult) -> Void)? = update.map { forward in
+            { @Sendable (result: NetToysScanResult) in
+                if result.isReachable || !budget.isFull { forward(result) }
+            }
+        }
         var completed = 0
         // A sliding window whose width follows the timeout share, instead of fixed batches.
         var width = AdaptiveConcurrency(ceiling: concurrency)
@@ -1166,7 +1180,7 @@ package actor NetToysScanner {
                             scanUnresponsiveHosts: scanUnresponsiveHosts,
                             fetchOptions: fetchOptions,
                             nameServer: Self.nameServer(localDNSServer, for: target.address, in: activeNetwork),
-                            update: update
+                            update: capped
                         )
                     }
                 }
@@ -1174,7 +1188,7 @@ package actor NetToysScanner {
             await launch()
             while let value = await group.next() {
                 inFlight -= 1
-                if let value { scanned.append(value) }
+                if let value, budget.admit(value) { scanned.append(value) }
                 width.record(timedOut: value?.isReachable != true)
                 completed += 1
                 progress?(completed, targets.count)
@@ -1406,7 +1420,12 @@ nonisolated enum HostResolver {
 
     static func unicastPTR(_ address: IPv4Address, server: IPv4Address, timeoutMilliseconds: Int32 = 800) -> String? {
         let id = UInt16.random(in: 1...UInt16.max)
-        let query = ptrQuery(for: address, id: id)
+        return exchange(ptrQuery(for: address, id: id), server: server, timeoutMilliseconds: timeoutMilliseconds)
+            .flatMap { ptrAnswer(in: $0, id: id) }
+    }
+
+    /// Sends one DNS query over UDP and returns the first reply, or nil after the timeout.
+    static func exchange(_ query: [UInt8], server: IPv4Address, timeoutMilliseconds: Int32) -> [UInt8]? {
         let descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
@@ -1428,16 +1447,21 @@ nonisolated enum HostResolver {
         var buffer = [UInt8](repeating: 0, count: 512)
         let received = recv(descriptor, &buffer, buffer.count, 0)
         guard received > 0 else { return nil }
-        return ptrAnswer(in: Array(buffer.prefix(received)), id: id)
+        return Array(buffer.prefix(received))
     }
 
     static func ptrQuery(for address: IPv4Address, id: UInt16) -> [UInt8] {
+        query(name: reverseName(address), type: 12, id: id)
+    }
+
+    /// A recursive query for one name of `type` (1 is A, 12 is PTR), class IN.
+    static func query(name: String, type: UInt8, id: UInt16) -> [UInt8] {
         var packet: [UInt8] = [UInt8(id >> 8), UInt8(id & 0xFF), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]
-        for label in reverseName(address).split(separator: ".") {
+        for label in name.split(separator: ".") {
             packet.append(UInt8(label.utf8.count))
             packet.append(contentsOf: label.utf8)
         }
-        packet.append(contentsOf: [0, 0, 12, 0, 1])
+        packet.append(contentsOf: [0, 0, type, 0, 1])
         return packet
     }
 
@@ -1585,6 +1609,11 @@ public nonisolated enum ARPTable {
             let requested = Set(addresses.map(\.description))
             return parse(arpOutput(), interfaceName: interfaceName).filter { requested.contains($0.key) }
         }.value
+    }
+
+    /// Every neighbor on the interface, address to MAC.
+    static func all(interfaceName: String?) async -> [String: String] {
+        await Task.detached(priority: .utility) { parse(arpOutput(), interfaceName: interfaceName) }.value
     }
 
     private static func arpOutput() -> String {

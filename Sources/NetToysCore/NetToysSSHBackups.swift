@@ -18,6 +18,10 @@ public nonisolated struct NetToysRuntimePaths: Sendable {
     public var knownHosts: URL { home.appendingPathComponent(".ssh/known_hosts") }
     public var backups: URL { data.appendingPathComponent("SSH Backups", isDirectory: true) }
     public var actionLog: URL { data.appendingPathComponent("actions.log") }
+    public var latency: URL { data.appendingPathComponent("latency.json") }
+    public var deviceWatch: URL { data.appendingPathComponent("device-watch.json") }
+    public var knownDevices: URL { data.appendingPathComponent("known-devices.json") }
+    public var failoverRequest: URL { data.appendingPathComponent("failover-request.json") }
 }
 
 /// One saved copy of ~/.ssh/config, taken before a change (per host) or once a day (periodic).

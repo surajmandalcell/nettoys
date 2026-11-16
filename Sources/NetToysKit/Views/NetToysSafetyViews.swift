@@ -119,6 +119,7 @@ struct NetToysActionLogList: View {
         case .wifiJoin: "Wi-Fi switch"
         case .undo: "Undo"
         case .safeMode: "Safe mode"
+        case .wake: "Wake"
         }
     }
 

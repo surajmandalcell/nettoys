@@ -86,10 +86,20 @@ public actor NetToysHelperRuntime {
     private var gate: NetToysActionGate
     /// Monotonic seconds; wall-clock jumps never shorten a wait.
     private let uptime: @Sendable () -> TimeInterval
+    private let notify: @Sendable (NetToysAlert) -> Void
+    private var dnsCheck: NetToysDNSCheck?
+    private var pendingLatency: [String: [NetToysLatencySample]] = [:]
+    private var lastLatencyFlush: TimeInterval?
+    private var internetPresence = NetToysPresence()
+    private var devicePresence: [String: NetToysPresence] = [:]
+    /// Watched port states from the last check, per device, to alert on a change.
+    private var portStates: [String: [UInt16: Bool]] = [:]
 
-    public init(owner: NetToysHostID, paths: NetToysRuntimePaths = .standard) {
+    public init(owner: NetToysHostID, paths: NetToysRuntimePaths = .standard,
+                notify: @escaping @Sendable (NetToysAlert) -> Void = NetToysNotifier.post) {
         self.owner = owner
         self.paths = paths
+        self.notify = notify
         scanner = NetToysScanner()
         gate = NetToysActionGate(log: NetToysActionLog(url: paths.actionLog))
         uptime = { ProcessInfo.processInfo.systemUptime }
@@ -182,17 +192,88 @@ public actor NetToysHelperRuntime {
         if sleepDetector.didWake(wall: Date(), uptime: now) {
             wifiFailoverMonitor.didWake(at: now, wait: configuration.wifiPriority.waitAfterWake)
         }
-        // The background network check runs every 30 s, every 60 s on battery.
-        let networkInterval: TimeInterval = PowerSource.isOnBattery() ? 60 : 30
-        if (configuration.wifiPriority.isEnabled || configuration.recordsNetworkHistory),
-           lastNetworkCheck.map({ now - $0 >= networkInterval }) ?? true {
-            lastNetworkCheck = now
-            await checkNetwork(configuration)
-        } else if !configuration.wifiPriority.isEnabled {
+        switch NetToysFailoverRequest.take(from: paths.failoverRequest) {
+        case .joinNow:
+            wifiFailoverMonitor.requestJoinNow()
+            lastNetworkCheck = nil
+        case .stay:
+            wifiFailoverMonitor.stay()
+            lastNetworkCheck = nil
+        case nil: break
+        }
+        if !configuration.wifiPriority.isEnabled {
             wifiFailoverMonitor = WiFiFailoverMonitor()
             wifiFailoverStatus = nil
         }
+        // The background network check runs every 30 s, every 60 s on battery.
+        let networkInterval: TimeInterval = PowerSource.isOnBattery() ? 60 : 30
+        if lastNetworkCheck.map({ now - $0 >= networkInterval }) ?? true {
+            lastNetworkCheck = now
+            await checkNetwork(configuration)
+            await checkDevices(record: configuration.recordsNetworkHistory)
+            if lastLatencyFlush.map({ now - $0 >= 120 }) ?? true {
+                lastLatencyFlush = now
+                if (try? NetToysLatencyStore.append(pendingLatency, to: paths.latency)) != nil { pendingLatency = [:] }
+            }
+        }
         currentStatuses = statuses
+    }
+
+    /// Pings the watched and favorite devices: latency samples, offline and online alerts, and port changes.
+    private func checkDevices(record: Bool) async {
+        let watches = NetToysDeviceWatchStore.load(from: paths.deviceWatch)
+        let favorites = NetToysScannerStore.annotations(at: paths.data.appendingPathComponent("scanner-annotations.json"))
+            .filter(\.value.isFavorite).keys
+        let ids = Set(watches.keys).union(favorites).sorted().prefix(32).compactMap(IPv4Address.init)
+        let kept = Set(ids.map(\.description))
+        devicePresence = devicePresence.filter { kept.contains($0.key) }
+        portStates = portStates.filter { kept.contains($0.key) }
+        let checks = await withTaskGroup(of: (String, Double?, [UInt16: Bool]).self) { group in
+            for address in ids {
+                let ports = watches[address.description]?.ports ?? []
+                group.addTask {
+                    async let ping = PingProbe.check(address: address, count: 1, timeoutMilliseconds: 1_000)
+                    var states: [UInt16: Bool] = [:]
+                    for port in ports {
+                        states[port] = await TCPPortProbe.check(host: address.description, port: port,
+                                                                timeoutMilliseconds: 900).state == .open
+                    }
+                    return (address.description, await ping?.averageMilliseconds, states)
+                }
+            }
+            return await group.reduce(into: []) { $0.append($1) }
+        }
+        let date = Date()
+        var alerts: [(String, (String) -> NetToysAlert)] = []
+        for (id, milliseconds, ports) in checks {
+            let up = milliseconds != nil || ports.values.contains(true)
+            if record { pendingLatency[id, default: []].append(NetToysLatencySample(date: date, milliseconds: milliseconds)) }
+            let watch = watches[id] ?? NetToysDeviceWatch()
+            switch devicePresence[id, default: NetToysPresence()].observe(up: up, at: date) {
+            case .down where watch.notifyOffline:
+                alerts.append((id, { NetToysAlert(title: "\($0) is offline", body: "It stopped answering at \(id).") }))
+            case .back(let after) where watch.notifyOnline:
+                alerts.append((id, { NetToysAlert(title: "\($0) is back online",
+                                                   body: "It was offline for \(NetToysDuration.text(after)).") }))
+            default: break
+            }
+            // A device that is down closes every port; only compare ports while it answers.
+            guard up else { continue }
+            let before = portStates[id] ?? [:]
+            portStates[id] = ports
+            for (port, open) in ports.sorted(by: { $0.key < $1.key }) {
+                guard let was = before[port], was != open else { continue }
+                alerts.append((id, { NetToysAlert(title: "\($0): port \(port) \(open ? "opened" : "closed")",
+                                                   body: "Port \(port) on \(id) is \(open ? "open" : "closed") now.") }))
+            }
+        }
+        guard !alerts.isEmpty else { return }
+        // Names come from the scan archive, read only when an alert fires.
+        let latest = NetToysScannerStore.archive().runs.last?.results ?? []
+        for (id, make) in alerts {
+            let name = latest.first { $0.id == id }.map(NetToysAlert.deviceName) ?? id
+            notify(make(name))
+        }
     }
 
     private func check(_ configuredAnchor: SSHAnchorConfiguration) async -> SSHAnchorStatus {
@@ -558,6 +639,7 @@ public actor NetToysHelperRuntime {
 
     private func checkNetwork(_ configuration: NetToysConfiguration) async {
         guard let route = await DefaultRoute.load() else {
+            dnsCheck = nil
             recordNetwork(
                 networkID: "disconnected",
                 ssid: nil,
@@ -577,9 +659,26 @@ public actor NetToysHelperRuntime {
         }
         async let gateway = NetworkProbe.gateway(route.gateway)
         async let internet = NetworkProbe.internet()
+        async let dns = DNSProbe.check()
         let ssid = NetworkSSID.current(interfaceName: route.interfaceName)
         let internetState = await internet
-        let gatewayState = await gateway
+        let (gatewayState, gatewayMilliseconds) = await gateway
+        dnsCheck = await dns
+        let date = Date()
+        if configuration.recordsNetworkHistory, gatewayState != .unknown {
+            pendingLatency[NetToysLatencyHistory.gateway, default: []]
+                .append(NetToysLatencySample(date: date, milliseconds: gatewayMilliseconds))
+        }
+        if internetState != .unknown {
+            switch internetPresence.observe(up: internetState == .reachable, at: date) {
+            case .down: notify(NetToysAlert(title: "Internet is down",
+                                            body: "\(ssid ?? "This network") stopped reaching the Internet."))
+            case .back(let after): notify(NetToysAlert(title: "Internet is back",
+                                                       body: "The outage lasted \(NetToysDuration.text(after))."))
+            case nil: break
+            }
+        }
+        await announceNewNeighbors(interfaceName: route.interfaceName)
         recordNetwork(
             networkID: route.networkID,
             ssid: ssid,
@@ -595,6 +694,19 @@ public actor NetToysHelperRuntime {
             left: NetworkSSID.isWiFiOff(),
             hasActiveRoute: true
         )
+    }
+
+    /// The neighbor table holds every device that talked on the subnet lately, so a new MAC shows up without a scan.
+    private func announceNewNeighbors(interfaceName: String) async {
+        guard let network = LocalIPv4Network.active(preferredInterfaceName: interfaceName) else { return }
+        let neighbors = await ARPTable.all(interfaceName: interfaceName).compactMap { address, mac -> NetToysScanResult? in
+            guard network.contains(address), let address = IPv4Address(address) else { return nil }
+            return NetToysScanResult(address: address, isReachable: true, responseMilliseconds: nil, hostname: nil,
+                                     macAddress: mac, vendor: MACVendorDatabase.bundled.vendor(for: mac), openPorts: [])
+        }
+        let found = (try? NetToysKnownDevices.newDevices(neighbors.sorted { $0.address < $1.address },
+                                                          at: paths.knownDevices)) ?? []
+        NetToysKnownDevices.alert(for: found).map(notify)
     }
 
     private func updateWiFiFailover(
@@ -638,10 +750,13 @@ public actor NetToysHelperRuntime {
             let attempts = wifiFailoverMonitor.attempts
             let exhausted = isFailure && attempts > 0 && attempts >= configuration.ssids.count
             let resting = isFailure && now < wifiFailoverMonitor.holdUntil
+            let staying = isFailure && wifiFailoverMonitor.staying
             wifiFailoverStatus = WiFiFailoverStatus(
                 state: exhausted ? .failed : isFailure ? .waiting : .monitoring,
                 message: exhausted
                     ? "Every saved Wi-Fi network was tried. Waiting for the connection to return."
+                    : staying
+                    ? "Staying on \(currentSSID ?? "this network") until the connection returns."
                     : resting
                     ? "Internet is unavailable. Waiting after wake or a recent switch."
                     : isFailure
@@ -649,6 +764,12 @@ public actor NetToysHelperRuntime {
                     : "Internet is reachable.",
                 updatedAt: date
             )
+            // The panel counts down to the next attempt; it assumes the next saved network is nearby.
+            if isFailure, !exhausted, let at = wifiFailoverMonitor.nextAttempt(threshold: configuration.outageThreshold) {
+                wifiFailoverStatus?.next = WiFiFailoverMonitor.nextSSID(after: currentSSID, priorities: configuration.ssids,
+                                                                       availableSSIDs: Set(configuration.ssids))
+                wifiFailoverStatus?.joinAt = date.addingTimeInterval(max(0, at - now))
+            }
             return
         }
         wifiFailoverMonitor.didAttempt(at: now)
@@ -771,26 +892,29 @@ public actor NetToysHelperRuntime {
             ownerBundleID: owner.rawValue,
             ownerPID: ProcessInfo.processInfo.processIdentifier,
             packageVersion: NetToysBuild.packageVersion,
-            system: .make(settings: cachedConfiguration, warnings: gate.warningCount(at: uptime()))
+            system: .make(settings: cachedConfiguration, warnings: gate.warningCount(at: uptime())),
+            dns: dnsCheck
         )
     }
 }
 
 nonisolated enum NetworkProbe {
-    static func gateway(_ host: String) async -> NetworkReachability {
+    /// Reachability and the round trip in ms.
+    static func gateway(_ host: String) async -> (NetworkReachability, Double?) {
         do {
             let result = try await SSHProcessRunner.run(
                 executableURL: URL(fileURLWithPath: "/sbin/ping"),
                 arguments: ["-n", "-c", "1", "-W", "1000", "-t", "2", host],
-                environment: ProcessInfo.processInfo.environment,
+                environment: ProcessInfo.processInfo.environment.merging(["LC_ALL": "C"]) { _, new in new },
                 maximumOutputBytes: 65_536,
                 timeout: 4
             )
-            return result.status == 0 ? .reachable : .unreachable
+            guard result.status == 0 else { return (.unreachable, nil) }
+            return (.reachable, PingProbe.parse(result.standardOutput)?.averageMilliseconds)
         } catch SSHKeyAccessError.timeout {
-            return .unreachable
+            return (.unreachable, nil)
         } catch {
-            return .unknown
+            return (.unknown, nil)
         }
     }
 
