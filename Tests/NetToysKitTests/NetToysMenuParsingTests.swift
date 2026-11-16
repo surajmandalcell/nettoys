@@ -3,10 +3,14 @@ import XCTest
 @testable import NetToysKit
 
 final class NetToysMenuParsingTests: XCTestCase {
-    func testSpeedTestReadsDownloadFromNetworkQualityJSON() {
-        let fixture = Data(#"{"dl_throughput":412345678,"ul_throughput":40123456,"responsiveness":1234.5,"interface_name":"en0"}"#.utf8)
-        XCTAssertEqual(NetToysSpeedTest.downloadMbps(fixture) ?? 0, 412.345678, accuracy: 0.0001)
-        XCTAssertNil(NetToysSpeedTest.downloadMbps(Data(#"{"error_code":-1}"#.utf8)))
+    func testSpeedTestReadsLiveAndFinalDownloadFromNetworkQualityOutput() {
+        // Captured from networkQuality under a terminal: live lines end in \r, then the summary.
+        let live = "\u{1b}[2K\rDownlink: 286.335 Mbps, 0 RPM - Uplink: 0.000 Mbps, 0 RPM\r\u{1b}[2K\rDownlink: 312.5 Mbps, 52 RPM - Uplink: 0.000 Mbps, 0 RPM\r"
+        XCTAssertEqual(NetToysSpeedTest.downloadMbps(live) ?? 0, 312.5, accuracy: 0.001)
+        XCTAssertNil(NetToysSpeedTest.downloadMbps(live, final: true), "A stopped test has no summary.")
+        let done = live + "\u{1b}[2K==== SUMMARY ====\r\nDownlink capacity: 1.385 Gbps\r\nDownlink Responsiveness: High (7.046 milliseconds | 8514 RPM)\r\n"
+        XCTAssertEqual(NetToysSpeedTest.downloadMbps(done, final: true) ?? 0, 1_385, accuracy: 0.001)
+        XCTAssertEqual(NetToysSpeedTest.downloadMbps(done) ?? 0, 1_385, accuracy: 0.001)
     }
 
     func testDurationsUseFullHoursThenMinThenSec() {

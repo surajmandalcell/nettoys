@@ -10,8 +10,9 @@ public struct NetToysTraySnapshot: Sendable {
     var localNetwork: LocalIPv4Network?
     var ssid: String?
     var gatewayMilliseconds: Double?
-    /// Gateway pings taken while the panel was open, oldest first. Nil is a lost ping.
+    /// The last hour of the runtime's gateway series, oldest first. Nil is a lost ping.
     var latencySamples: [Double?] = []
+    var latencyStamp: Date?
     /// When the current online (or offline) stretch began, from Network History.
     var stateSince: Date?
     var outagesToday = 0
@@ -38,10 +39,19 @@ public struct NetToysTraySnapshot: Sendable {
                 snapshot.deviceCount = seen.count
                 snapshot.offlineDeviceCount = seen.subtracting(up).count
             }
+            // The latency file changes every 2 min at most; decode it only then.
+            let latency = NetToysRuntimePaths.standard.latency
+            snapshot.latencyStamp = (try? FileManager.default.attributesOfItem(atPath: latency.path))?[.modificationDate] as? Date
+            if snapshot.latencyStamp == previous.latencyStamp, previous.isLoaded {
+                snapshot.latencySamples = previous.latencySamples
+            } else {
+                let hourAgo = Date().addingTimeInterval(-3_600)
+                snapshot.latencySamples = (NetToysLatencyStore.load(from: latency).series[NetToysLatencyHistory.gateway] ?? [])
+                    .filter { $0.date > hourAgo }.map(\.milliseconds)
+            }
             snapshot.isLoaded = true
             return snapshot
         }.value
-        result.latencySamples = previous.latencySamples
         guard !Task.isCancelled else { return result }
         let routeData = try? await TailscalePeerCatalog.runStatusCommand(
             executableURL: URL(fileURLWithPath: "/sbin/route"), arguments: ["-n", "get", "default"],
@@ -64,7 +74,6 @@ public struct NetToysTraySnapshot: Sendable {
             )
             result.gatewayMilliseconds = ping.flatMap { PingProbe.parse(String(decoding: $0, as: UTF8.self))?.averageMilliseconds }
         }
-        result.latencySamples = Array((result.latencySamples + [result.gatewayMilliseconds]).suffix(60))
         return result
     }
 
@@ -164,7 +173,13 @@ struct NetToysMenuPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let join = autoJoin { autoJoinCard(join).padding(.bottom, 8) }
+            if let failover = snapshot.helperStatus?.wifiFailover, snapshot.configuration.wifiPriority.isEnabled,
+               failover.state == .waiting, let next = failover.next, let joinAt = failover.joinAt {
+                TimelineView(.periodic(from: now, by: 1)) { context in
+                    autoJoinCard(next: next, joinAt: joinAt, now: max(context.date, now))
+                }
+                .padding(.bottom, 8)
+            }
             latencyCard
             Color.clear.frame(height: 8)
             statusCard
@@ -214,38 +229,34 @@ struct NetToysMenuPanel: View {
 
     // MARK: Outage auto-join
 
-    private struct AutoJoin { let next: String; let current: String; let seconds: Int; let fraction: Double }
-
-    private var autoJoin: AutoJoin? {
-        let priority = snapshot.configuration.wifiPriority
-        guard priority.isEnabled, let failover = snapshot.helperStatus?.wifiFailover, failover.state == .waiting,
-              let current = snapshot.ssid ?? snapshot.helperStatus?.network?.ssid,
-              let index = priority.ssids.firstIndex(of: current), index + 1 < priority.ssids.count
-        else { return nil }
-        let left = max(0, priority.outageThreshold - now.timeIntervalSince(failover.updatedAt))
-        return AutoJoin(next: priority.ssids[index + 1], current: current, seconds: Int(left.rounded(.up)),
-                        fraction: priority.outageThreshold > 0 ? 1 - left / priority.outageThreshold : 1)
-    }
-
-    private func autoJoinCard(_ join: AutoJoin) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    /// The runtime's countdown. Join Now and Stay go to the runtime, which still applies pause, dry run, and cooldown.
+    private func autoJoinCard(next: String, joinAt: Date, now: Date) -> some View {
+        let threshold = snapshot.configuration.wifiPriority.outageThreshold
+        let left = max(0, joinAt.timeIntervalSince(now))
+        let current = snapshot.ssid ?? snapshot.helperStatus?.network?.ssid ?? "this network"
+        let held: Bool = switch system { case .paused, .failed: true; default: false }
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "wifi").font(.system(size: 13, weight: .semibold)).foregroundStyle(Dense.accent)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Joining \(join.next) in \(NetToysDuration.text(TimeInterval(join.seconds)))")
+                    Text(left > 0 ? "Joining \(next) in \(NetToysDuration.text(left.rounded(.up)))" : "Joining \(next)…")
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(Dense.label).monospacedDigit()
                     Text("Next network in your Wi-Fi Priority list").font(.system(size: 11)).foregroundStyle(Dense.secondary)
                 }
             }
             Capsule().fill(Dense.track).frame(height: 4).overlay(alignment: .leading) {
-                GeometryReader { proxy in Capsule().fill(Dense.accent).frame(width: proxy.size.width * join.fraction) }
+                GeometryReader { proxy in
+                    Capsule().fill(Dense.accent)
+                        .frame(width: proxy.size.width * (threshold > 0 ? min(max(1 - left / threshold, 0), 1) : 1))
+                }
             }
-            // stub: Join Now and Stay need a failover command in NetToysCore; both stay disabled until it exists.
             HStack(spacing: 8) {
-                Button("Join Now") {}.buttonStyle(DenseCapsuleButtonStyle(prominent: true))
-                Button("Stay on \(join.current)") {}.buttonStyle(DenseCapsuleButtonStyle())
+                Button("Join Now") { try? NetToysFailoverRequest.joinNow.send() }
+                    .buttonStyle(DenseCapsuleButtonStyle(prominent: true))
+                Button("Stay on \(current)") { try? NetToysFailoverRequest.stay.send() }
+                    .buttonStyle(DenseCapsuleButtonStyle())
             }
-            .disabled(true)
+            .disabled(held)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -286,8 +297,7 @@ struct NetToysMenuPanel: View {
         return VStack(spacing: 0) {
             statusRow("Internet", internet == .reachable ? "Working" : internet == .unreachable ? "Down" : "Unknown",
                       tone: internet == .unreachable ? Panel.red : nil)
-            // stub: the DNS check is not built yet.
-            statusRow("DNS", "Not checked")
+            statusRow("DNS", dnsText, tone: dnsFailed ? Panel.red : nil)
             statusRow("Outages today", snapshot.outagesToday == 0 ? "None"
                       : "\(snapshot.outagesToday), for \(NetToysDuration.text(snapshot.outageSecondsToday))")
             statusRow("SSH Anchor", monitored.isEmpty ? "Off" : "\(monitored.count - failing) of \(monitored.count) hosts",
@@ -297,6 +307,16 @@ struct NetToysMenuPanel: View {
         }
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Panel.card))
         .padding(.horizontal, 10)
+    }
+
+    /// A check older than 5 min is stale: the runtime stopped.
+    private var dns: NetToysDNSCheck? {
+        snapshot.helperStatus?.dns.flatMap { now.timeIntervalSince($0.checkedAt) < 300 ? $0 : nil }
+    }
+    private var dnsFailed: Bool { dns != nil && dns?.milliseconds == nil }
+    private var dnsText: String {
+        guard let dns else { return "Not checked" }
+        return dns.milliseconds.map { "\(max(1, Int($0.rounded()))) ms" } ?? "Not answering"
     }
 
     private func statusRow(_ label: String, _ value: String, tone: Color? = nil, last: Bool = false) -> some View {
@@ -323,9 +343,9 @@ struct NetToysMenuPanel: View {
         if case .running(let started) = speedTest.phase {
             TimelineView(.periodic(from: started, by: 0.25)) { context in
                 let fraction = min(context.date.timeIntervalSince(started) / NetToysSpeedTest.maximumSeconds, 0.97)
-                // shortcut: networkQuality -c reports only at the end, so the row shows the elapsed share, not a live Mbps value; parse its verbose output when a live value is needed.
                 NetToysWellRow(symbol: "gauge.with.dots.needle.67percent", title: "Testing speed…",
-                               detail: "Measuring download", value: "Stop", valueIsAction: true, ring: fraction) {
+                               detail: speedTest.liveMbps.map { "Download \(Int($0.rounded())) Mbps" } ?? "Measuring download",
+                               value: "Stop", valueIsAction: true, ring: fraction) {
                     speedTest.stop()
                 }
             }
@@ -494,8 +514,8 @@ private struct NetToysMenuItem: View {
     }
 }
 
-/// Gateway latency, edge to edge, with a soft fill.
-private struct NetToysLatencyChart: View {
+/// Latency, edge to edge, with a soft fill. The panel draws the gateway; the device modal draws one device.
+struct NetToysLatencyChart: View {
     let values: [Double]
 
     var body: some View {

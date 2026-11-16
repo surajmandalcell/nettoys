@@ -16,12 +16,15 @@ final class NetToysSpeedTest {
 
     private(set) var phase = Phase.idle
     private(set) var lastMbps: Double?
+    /// The download value while the test runs.
+    private(set) var liveMbps: Double?
     @ObservationIgnored private var process: Process?
     @ObservationIgnored private let defaults: UserDefaults
 
-    init(defaults: UserDefaults, phase: Phase = .idle) {
+    init(defaults: UserDefaults, phase: Phase = .idle, liveMbps: Double? = nil) {
         self.defaults = defaults
         self.phase = phase
+        self.liveMbps = liveMbps
         lastMbps = defaults.object(forKey: Self.lastKey) as? Double
     }
 
@@ -30,25 +33,34 @@ final class NetToysSpeedTest {
     func start() {
         guard !isRunning else { return }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/networkQuality")
-        // Download only, JSON output, capped run time.
-        process.arguments = ["-u", "-c", "-M", "\(Int(Self.maximumSeconds))"]
+        // networkQuality prints live values only to a terminal; `script` gives it one. Stopping `script` stops it.
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+        process.arguments = ["-q", "/dev/null", "/usr/bin/networkQuality", "-u", "-M", "\(Int(Self.maximumSeconds))"]
         let output = Pipe()
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         self.process = process
+        liveMbps = nil
         phase = .running(started: Date())
         Task {
-            let data = await Task.detached(priority: .utility) { () -> Data? in
+            let text = await Task.detached(priority: .utility) { () -> String? in
                 do { try process.run() } catch { return nil }
-                let data = output.fileHandleForReading.readDataToEndOfFile()
+                var text = ""
+                while let chunk = try? output.fileHandleForReading.read(upToCount: 4_096), !chunk.isEmpty {
+                    text += String(decoding: chunk, as: UTF8.self)
+                    if text.utf8.count > 262_144 { text = String(text.suffix(4_096)) }
+                    if let mbps = Self.downloadMbps(text) {
+                        Task { @MainActor in if self.process === process { self.liveMbps = mbps } }
+                    }
+                }
                 process.waitUntilExit()
-                return data
+                return text
             }.value
             guard self.process === process else { return }
             self.process = nil
-            if process.terminationReason == .uncaughtSignal { phase = .idle; return }
-            if let mbps = data.flatMap(Self.downloadMbps) {
+            liveMbps = nil
+            if let mbps = text.flatMap({ Self.downloadMbps($0, final: true) }) {
                 lastMbps = mbps
                 defaults.set(mbps, forKey: Self.lastKey)
                 phase = .idle
@@ -61,14 +73,26 @@ final class NetToysSpeedTest {
     func stop() {
         process?.terminate()
         process = nil
+        liveMbps = nil
         phase = .idle
     }
 
-    /// `networkQuality -c` reports `dl_throughput` in bits per second.
-    nonisolated static func downloadMbps(_ json: Data) -> Double? {
-        guard let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let bits = (object["dl_throughput"] as? NSNumber)?.doubleValue, bits > 0
-        else { return nil }
-        return bits / 1_000_000
+    /// The newest download value in networkQuality's terminal output. Live lines read
+    /// "Downlink: 286.335 Mbps, 52 RPM - Uplink: ..."; the summary reads "Downlink capacity: 11.385 Gbps".
+    nonisolated static func downloadMbps(_ output: String, final: Bool = false) -> Double? {
+        let lines = output.split(whereSeparator: \.isNewline)
+        for line in lines.reversed() where line.contains(final ? "Downlink capacity:" : "Downlink") {
+            let words = line.split(separator: " ")
+            for index in words.indices.dropLast() {
+                guard let value = Double(words[index]) else { continue }
+                switch words[index + 1].trimmingCharacters(in: .punctuationCharacters) {
+                case "Kbps": return value / 1_000
+                case "Mbps": return value
+                case "Gbps": return value * 1_000
+                default: continue
+                }
+            }
+        }
+        return nil
     }
 }

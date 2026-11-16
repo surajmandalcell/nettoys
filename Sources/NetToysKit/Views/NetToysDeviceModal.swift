@@ -9,6 +9,10 @@ struct NetToysDeviceModal: View {
     let close: () -> Void
     @State private var comment = ""
     @State private var confirmForget = false
+    @State var watch = NetToysDeviceWatch()
+    /// The device's last 24 hours, oldest first.
+    @State var samples: [NetToysLatencySample] = []
+    @State private var wakeNote: String?
 
     var body: some View {
         if let result = model.results.first(where: { $0.id == id }) {
@@ -26,6 +30,14 @@ struct NetToysDeviceModal: View {
             .background { Button("Close", action: close).keyboardShortcut(.cancelAction).hidden() }
             .onAppear { comment = model.annotation(for: id).comment }
             .onDisappear(perform: saveComment)
+            .task(id: id) {
+                let id = id
+                let loaded = await Task.detached(priority: .utility) {
+                    (NetToysDeviceWatchStore.load()[id], NetToysLatencyStore.load().series[id])
+                }.value
+                if let watch = loaded.0 { self.watch = watch }
+                if let samples = loaded.1 { self.samples = samples }
+            }
             .confirmationDialog("Forget \(NetToysDeviceText.name(result) ?? result.address.description)?",
                                 isPresented: $confirmForget, titleVisibility: .visible) {
                 Button("Forget Device", role: .destructive) {
@@ -90,9 +102,9 @@ struct NetToysDeviceModal: View {
 
     private func actions(_ result: NetToysScanResult) -> some View {
         HStack(spacing: 8) {
-            // stub: Wake-on-LAN is not built yet; the button stays disabled until it is.
-            Button {} label: { Label("Wake Device", systemImage: "power") }
-                .disabled(true).help("Wake-on-LAN comes in a later version.")
+            Button { wake(result) } label: { Label(wakeNote ?? "Wake Device", systemImage: "power") }
+                .disabled(paused || result.macAddress == nil)
+                .help(result.macAddress == nil ? "Wake needs the device's MAC address from a scan on this network." : "")
             Button { NetToysDeviceActions.openSSH(result) } label: { Label("Open SSH", systemImage: "terminal") }
                 .disabled(paused || !result.openPorts.contains(22))
             Button { NetToysDeviceActions.copy(result.address.description) } label: {
@@ -139,39 +151,95 @@ struct NetToysDeviceModal: View {
                 Text("No open ports in the last scan.").font(.system(size: 13)).foregroundStyle(Dense.secondary)
                     .padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
             }
-            // stub: port watch is not built yet; each switch stays off and disabled.
             ForEach(result.openPorts, id: \.self) { port in
-                DenseSwitchRow(label: NetToysDeviceText.service(port), detail: "Port \(port)", last: port == result.openPorts.last)
+                DenseSwitchRow(label: NetToysDeviceText.service(port), detail: "Port \(port)",
+                               isOn: watchBinding({ $0.ports.contains(port) }, set: { watch, on in
+                                   if on { watch.ports.append(port) } else { watch.ports.removeAll { $0 == port } }
+                               }),
+                               last: port == result.openPorts.last)
             }
         }
     }
 
+    /// A switch that saves the device watch at once and asks for notification permission the first time one turns on.
+    private func watchBinding(_ get: @escaping (NetToysDeviceWatch) -> Bool,
+                              set: @escaping (inout NetToysDeviceWatch, Bool) -> Void) -> Binding<Bool> {
+        Binding {
+            get(watch)
+        } set: { on in
+            set(&watch, on)
+            let id = id
+            let change = watch
+            Task.detached(priority: .userInitiated) {
+                _ = try? NetToysDeviceWatchStore.update(id) { $0 = change }
+                if on { _ = await NetToysNotifier.requestPermission() }
+            }
+        }
+    }
+
+    private func wake(_ result: NetToysScanResult) {
+        guard let mac = result.macAddress else { return }
+        let name = NetToysDeviceText.name(result) ?? result.address.description
+        Task {
+            let note: String = await Task.detached(priority: .userInitiated) {
+                do { return try NetToysWakeOnLAN.wake(mac: mac, deviceName: name) ? "Wake Sent" : "Dry Run Logged" }
+                catch { return "Wake Failed" }
+            }.value
+            wakeNote = note
+            try? await Task.sleep(for: .seconds(2))
+            wakeNote = nil
+        }
+    }
+
     private func latency(_ result: NetToysScanResult) -> some View {
-        DenseSection(title: "Latency", note: "Last 24 hours") {
+        let day = Date().addingTimeInterval(-86_400)
+        let values = samples.filter { $0.date > day }.map(\.milliseconds)
+        let answered = values.compactMap { $0 }
+        let average = answered.isEmpty ? nil : answered.reduce(0, +) / Double(answered.count)
+        return DenseSection(title: "Latency", note: "Last 24 hours") {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text(result.responseMilliseconds.map { "\(Int($0.rounded()))" } ?? "None")
+                    Text(average.map { "\(Int($0.rounded()))" } ?? "None")
                         .font(.system(size: 15, weight: .semibold)).foregroundStyle(Dense.label)
-                    if result.responseMilliseconds != nil {
-                        Text("ms now").font(.system(size: 11)).foregroundStyle(Dense.secondary)
+                    if average != nil {
+                        Text("ms average").font(.system(size: 11)).foregroundStyle(Dense.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    if let low = answered.min(), let high = answered.max() {
+                        Text("Min \(Int(low.rounded())) · Max \(Int(high.rounded())) ms")
+                            .font(.system(size: 11)).foregroundStyle(Dense.secondary)
                     }
                 }
                 .monospacedDigit()
-                // stub: latency history is not recorded yet; the chart area waits for it.
-                Text("The 24 hour average shows here once history is recorded.")
-                    .font(.system(size: 11)).foregroundStyle(Dense.tertiary)
-                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Dense.group))
+                if answered.count > 1 {
+                    NetToysLatencyChart(values: Self.buckets(values))
+                        .frame(height: 40)
+                } else {
+                    Text("Samples come from scans, and every 30 sec once an alert or port watch is on.")
+                        .font(.system(size: 11)).foregroundStyle(Dense.tertiary)
+                        .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Dense.group))
+                }
             }
             .padding(.horizontal, 10).padding(.top, 9).padding(.bottom, 9)
         }
     }
 
+    /// At most 96 points (15 min each over a full day): the average of each run of samples, 0 for a run with no answer.
+    static func buckets(_ values: [Double?]) -> [Double] {
+        let size = max(1, (values.count + 95) / 96)
+        return stride(from: 0, to: values.count, by: size).map { start in
+            let answered = values[start..<min(start + size, values.count)].compactMap { $0 }
+            return answered.isEmpty ? 0 : answered.reduce(0, +) / Double(answered.count)
+        }
+    }
+
     private var alerts: some View {
-        // stub: device alerts are not built yet; both switches stay off and disabled.
         DenseSection(title: "Alerts") {
-            DenseSwitchRow(label: "Notify when offline")
-            DenseSwitchRow(label: "Notify when back online", last: true)
+            DenseSwitchRow(label: "Notify when offline",
+                           isOn: watchBinding(\.notifyOffline, set: { $0.notifyOffline = $1 }))
+            DenseSwitchRow(label: "Notify when back online",
+                           isOn: watchBinding(\.notifyOnline, set: { $0.notifyOnline = $1 }), last: true)
         }
     }
 
