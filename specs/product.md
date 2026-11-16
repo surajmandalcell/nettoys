@@ -19,8 +19,14 @@ panel details are still open (redesign in progress).
   "Joining <next network> in 45 sec" with Join Now and Stay on <current>.
   Action buttons: Run Speed Test and Copy IP Address only.
 - Device modal: a centered, tall single column (about 440 pt) over the
-  blurred, dimmed window. Its actions are compact buttons (refinement
-  open).
+  blurred, dimmed window. Header: name in SF Pro Display 20 pt semibold
+  with a star, one status line (status, IP, vendor), a small close button.
+  Actions: a row of small capsule push buttons (Wake Device, Open SSH,
+  Copy IP Address) and a "..." menu (Add to SSH Anchor, Copy MAC Address,
+  Forget Device). Sections: Details, Open ports (watch switches),
+  Latency (average first, 24 hours), Alerts, Comment.
+- Panel buttons: compact push buttons like "Open Sam's NetToys", not
+  cards (exact style open).
 - Look: "Dense pro" polish.
 - Durations: full hours, "min", "sec", for example "1 hour 52 min".
 - Motion: hover fades in, selection is instant. The menu panel grows from
