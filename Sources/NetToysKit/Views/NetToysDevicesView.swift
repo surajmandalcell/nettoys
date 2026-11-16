@@ -203,7 +203,8 @@ struct NetToysDevicesView: View {
             scanButton
         }
         .padding(.leading, 20).padding(.trailing, 14)
-        .frame(height: 58)
+        .frame(height: 52) // centerline 26 pt, shared with the traffic lights
+
     }
 
     private var filterTitle: String {

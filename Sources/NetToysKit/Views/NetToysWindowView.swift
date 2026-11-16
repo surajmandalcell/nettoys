@@ -220,7 +220,8 @@ public struct NetToysWindowView: View {
         let offline = known.filter { !$0.isReachable }.count
         let counts: [NetToysDeviceScope: Int] = [.all: known.count, .favorites: favorites, .offline: offline]
         return VStack(alignment: .leading, spacing: 1) {
-            Color.clear.frame(height: 36) // traffic lights
+            // The traffic lights sit in this row: 8 pt inset plus 18 pt puts their center 26 pt from the top.
+            Color.clear.frame(height: 36).background(NetToysTrafficLights())
             sidebarCaption("Devices")
             ForEach(NetToysDeviceScope.allCases) { scope in
                 sidebarRow(scope.rawValue, scope.icon, count: counts[scope], selected: page == .scanner && deviceScope == scope) {
@@ -365,5 +366,50 @@ public struct NetToysWindowView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Moves the traffic lights into the sidebar's top row: close button 20 pt from the left edge,
+/// centered 26 pt from the top, on the same line as the toolbar title and controls.
+private struct NetToysTrafficLights: NSViewRepresentable {
+    func makeNSView(context: Context) -> LightsView { LightsView() }
+    func updateNSView(_ view: LightsView, context: Context) { view.place() }
+
+    final class LightsView: NSView {
+        private static let leading: CGFloat = 20
+        private static let centerFromTop: CGFloat = 26
+        private var observers: [NSObjectProtocol] = []
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            guard let window else { return }
+            for name in [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+                         NSWindow.didExitFullScreenNotification, NSWindow.didEndLiveResizeNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.place() }
+                })
+            }
+            place()
+        }
+
+        /// Runs after AppKit's own titlebar layout, which resets the buttons.
+        func place() {
+            DispatchQueue.main.async { [weak self] in
+                guard let window = self?.window, !window.styleMask.contains(.fullScreen),
+                      let close = window.standardWindowButton(.closeButton),
+                      let container = close.superview?.superview ?? close.superview, let ancestor = container.superview
+                else { return }
+                let frame = close.convert(close.bounds, to: nil)
+                let dx = Self.leading - frame.minX
+                let dy = window.frame.height - Self.centerFromTop - frame.midY
+                guard abs(dx) > 0.5 || abs(dy) > 0.5 else { return }
+                container.setFrameOrigin(NSPoint(x: container.frame.minX + dx,
+                                                 y: container.frame.minY + (ancestor.isFlipped ? -dy : dy)))
+            }
+        }
     }
 }
