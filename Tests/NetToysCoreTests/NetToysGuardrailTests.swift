@@ -54,4 +54,35 @@ final class NetToysGuardrailTests: XCTestCase {
         XCTAssertTrue(kept.contains { $0.hostAlias == "jetson" }, "The newest small backups stay.")
         XCTAssertEqual(kept.filter { $0.size == big.count }.map(\.hostAlias), ["c", "a"])
     }
+
+    func testHostMoveNeedsMACOrHostKeyProofNeverAnOpenPortAlone() async throws {
+        let anchor = SSHAnchorConfiguration(hostAlias: "jetson", hostName: "192.168.1.8", port: 22,
+                                            identity: .randomizedMAC(hostname: "jetson", learnedMACs: ["aabbccddeeff"]))
+        func result(_ ip: String, mac: String?, name: String?) throws -> NetToysScanResult {
+            NetToysScanResult(address: try XCTUnwrap(IPv4Address(ip)), isReachable: true, responseMilliseconds: 1,
+                              hostname: name, macAddress: mac, vendor: nil, openPorts: [22])
+        }
+        let noKey: @Sendable (String, UInt16) async -> Bool = { _, _ in false }
+        let sameKey: @Sendable (String, UInt16) async -> Bool = { _, _ in true }
+
+        // A stranger named "jetson" with port 22 open and an unknown MAC: rejected without the host key.
+        let stranger = SSHAnchorRecovery.resolve(anchor: anchor, scanResults: [try result("192.168.1.50", mac: "00:11:22:33:44:55", name: "jetson.local")])
+        XCTAssertEqual(stranger?.provenByMAC, false)
+        let rejected = await SSHAnchorRecovery.proven(stranger, hostKeyMatches: noKey)
+        XCTAssertNil(rejected)
+        let byKey = await SSHAnchorRecovery.proven(stranger, hostKeyMatches: sameKey)
+        XCTAssertEqual(byKey?.hostName, "192.168.1.50")
+
+        // A known MAC proves the device on its own.
+        let known = SSHAnchorRecovery.resolve(anchor: anchor, scanResults: [try result("192.168.1.44", mac: "AA:BB:CC:DD:EE:FF", name: nil)])
+        let byMAC = await SSHAnchorRecovery.proven(known, hostKeyMatches: noKey)
+        XCTAssertEqual(byMAC?.hostName, "192.168.1.44")
+
+        // Host key comparison: same key in known_hosts and in the scan, revoked keys never count.
+        let stored = "|1|salt|hash ssh-ed25519 AAAAkeyA\n@cert-authority * ssh-rsa AAAAca\n"
+        XCTAssertTrue(SSHHostKeyProof.keysMatch(stored: stored, scanned: "192.168.1.50 ssh-ed25519 AAAAkeyA\n"))
+        XCTAssertFalse(SSHHostKeyProof.keysMatch(stored: stored, scanned: "192.168.1.50 ssh-ed25519 AAAAother\n"))
+        XCTAssertFalse(SSHHostKeyProof.keysMatch(stored: "@revoked * ssh-ed25519 AAAAkeyA", scanned: "h ssh-ed25519 AAAAkeyA"))
+        XCTAssertFalse(SSHHostKeyProof.keysMatch(stored: "", scanned: ""))
+    }
 }

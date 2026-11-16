@@ -513,6 +513,8 @@ public nonisolated struct SSHAnchorConfiguration: Codable, Equatable, Identifiab
     public var localHostName: String?
     public var tailscaleFallback: TailscaleFallbackConfiguration?
     public var keyAccessVerifiedAt: Date?
+    /// The network this host lives on ("<subnet>|<router MAC>"). SSH Anchor searches only there.
+    public var homeNetwork: String?
 
     public init(
         id: UUID = UUID(),
@@ -602,11 +604,16 @@ nonisolated struct SSHAnchorRouteMonitor: Sendable {
     }
 }
 
+nonisolated struct SSHAnchorMove: Equatable, Sendable {
+    let anchor: SSHAnchorConfiguration
+    let provenByMAC: Bool
+}
+
 nonisolated enum SSHAnchorRecovery {
     static func resolve(
         anchor: SSHAnchorConfiguration,
         scanResults: [NetToysScanResult]
-    ) -> SSHAnchorConfiguration? {
+    ) -> SSHAnchorMove? {
         let candidates = scanResults
             .filter { $0.openPorts.contains(anchor.port) }
             .map {
@@ -624,7 +631,55 @@ nonisolated enum SSHAnchorRecovery {
             learnedMACs.insert(AnchorMatcher.normalizedMAC(mac))
             recovered.identity = .randomizedMAC(hostname: hostname, learnedMACs: learnedMACs)
         }
-        return recovered
+        return SSHAnchorMove(anchor: recovered, provenByMAC: AnchorMatcher.hasMACProof(match, identity: anchor.identity))
+    }
+
+    /// Accepts a move only with proof: a known MAC, or the same SSH host key at the new address.
+    /// A matching name with an open port alone never moves the host.
+    static func proven(
+        _ move: SSHAnchorMove?,
+        hostKeyMatches: @Sendable (_ host: String, _ port: UInt16) async -> Bool
+    ) async -> SSHAnchorConfiguration? {
+        guard let move else { return nil }
+        if move.provenByMAC { return move.anchor }
+        return await hostKeyMatches(move.anchor.hostName, move.anchor.port) ? move.anchor : nil
+    }
+}
+
+nonisolated enum SSHHostKeyProof {
+    /// True when the host at `host:port` shows a key that known_hosts stores under one of `names`.
+    static func matches(host: String, port: UInt16, names: [String], knownHosts: URL) async -> Bool {
+        var stored = ""
+        for name in names {
+            if let result = try? await SSHProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/usr/bin/ssh-keygen"),
+                arguments: ["-F", name, "-f", knownHosts.path],
+                maximumOutputBytes: 262_144,
+                timeout: 5
+            ) { stored += result.standardOutput + "\n" }
+        }
+        guard !keys(stored).isEmpty,
+              let scanned = try? await SSHProcessRunner.run(
+                  executableURL: URL(fileURLWithPath: "/usr/bin/ssh-keyscan"),
+                  arguments: ["-T", "3", "-p", String(port), host],
+                  maximumOutputBytes: 262_144,
+                  timeout: 8
+              )
+        else { return false }
+        return keysMatch(stored: stored, scanned: scanned.standardOutput)
+    }
+
+    static func keysMatch(stored: String, scanned: String) -> Bool {
+        !keys(stored).isDisjoint(with: keys(scanned))
+    }
+
+    /// "type base64" pairs from known_hosts or ssh-keyscan lines. Marked lines (@revoked, @cert-authority) never count.
+    static func keys(_ text: String) -> Set<String> {
+        Set(text.split(whereSeparator: \.isNewline).compactMap { line in
+            let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard fields.count >= 3, !fields[0].hasPrefix("#"), !fields[0].hasPrefix("@") else { return nil }
+            return "\(fields[1]) \(fields[2])"
+        })
     }
 }
 
@@ -710,6 +765,7 @@ public nonisolated struct NetToysConfiguration: Codable, Equatable, Sendable {
             if anchor.localHostName != before.localHostName { anchors[index].localHostName = anchor.localHostName }
             if anchor.tailscaleFallback != before.tailscaleFallback { anchors[index].tailscaleFallback = anchor.tailscaleFallback }
             if anchor.keyAccessVerifiedAt != before.keyAccessVerifiedAt { anchors[index].keyAccessVerifiedAt = anchor.keyAccessVerifiedAt }
+            if anchor.homeNetwork != before.homeNetwork { anchors[index].homeNetwork = anchor.homeNetwork }
         }
     }
 }

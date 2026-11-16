@@ -1373,8 +1373,10 @@ final class NetToysTests: XCTestCase {
             openPorts: [2222]
         )
 
-        let recovered = try XCTUnwrap(SSHAnchorRecovery.resolve(anchor: anchor, scanResults: [wrongPort, moved]))
+        let move = try XCTUnwrap(SSHAnchorRecovery.resolve(anchor: anchor, scanResults: [wrongPort, moved]))
+        let recovered = move.anchor
 
+        XCTAssertFalse(move.provenByMAC, "A name match alone needs SSH host key proof.")
         XCTAssertEqual(recovered.hostName, "192.168.1.44")
         XCTAssertEqual(
             recovered.identity,

@@ -598,6 +598,15 @@ package nonisolated enum AnchorMatcher {
         return matches.count == 1 ? matches[0] : nil
     }
 
+    /// A host name or an open port can belong to a stranger; only a MAC the anchor already knows proves the device.
+    static func hasMACProof(_ candidate: AnchorCandidate, identity: AnchorIdentity) -> Bool {
+        guard let mac = candidate.macAddress.map(normalizedMAC), mac.count == 12 else { return false }
+        switch identity {
+        case .stableMAC(let expected): return normalizedMAC(expected) == mac
+        case .randomizedMAC(_, let learned): return learned.contains { normalizedMAC($0) == mac }
+        }
+    }
+
     package static func normalizedMAC(_ value: String) -> String {
         value.lowercased().filter(\.isHexDigit)
     }

@@ -80,6 +80,7 @@ public actor NetToysHelperRuntime {
 
     private let paths: NetToysRuntimePaths
     private var nextSnapshotCheck = Date.distantPast
+    private var nextHomeCheck: [UUID: Date] = [:]
 
     public init(owner: NetToysHostID, paths: NetToysRuntimePaths = .standard) {
         self.owner = owner
@@ -179,6 +180,7 @@ public actor NetToysHelperRuntime {
             recoveryFailures[anchor.id] = nil
             nextRecovery[anchor.id] = nil
             nextTailscaleAttempt[anchor.id] = nil
+            await learnHomeNetwork(anchor)
             return status(anchor, .healthy)
         }
         if anchor.tailscaleFallback?.isEnabled == true,
@@ -311,10 +313,9 @@ public actor NetToysHelperRuntime {
     }
 
     private func recover(_ anchor: SSHAnchorConfiguration) async -> SSHAnchorStatus {
-        let route = await DefaultRoute.load()
-        guard let network = LocalIPv4Network.active(preferredInterfaceName: route?.interfaceName) else {
+        guard let network = await homeNetwork(for: anchor) else {
             scheduleRetry(for: anchor.id)
-            return status(anchor, .unavailable, "No active local IPv4 network was found.")
+            return status(anchor, .unavailable, Self.awayFromHomeMessage(anchor))
         }
         let targets: [IPv4Address]
         do {
@@ -327,12 +328,14 @@ public actor NetToysHelperRuntime {
         let results = await scanner.scan(
             targets: targets,
             ports: [anchor.port],
-            timeoutMilliseconds: 600,
-            concurrency: 64
+            timeoutMilliseconds: 600
         )
-        guard var recovered = SSHAnchorRecovery.resolve(anchor: anchor, scanResults: results) else {
+        let move = SSHAnchorRecovery.resolve(anchor: anchor, scanResults: results)
+        guard var recovered = await prove(move, original: anchor) else {
             scheduleRetry(for: anchor.id)
-            return status(anchor, .notFound, "No unique device matched this anchor.")
+            return status(anchor, .notFound, move == nil
+                ? "No unique device matched this anchor."
+                : "A device matched by name, but neither its MAC address nor its SSH host key is known. The config is unchanged.")
         }
         recovered.localHostName = recovered.hostName
         if recovered.hostName == anchor.hostName {
@@ -355,19 +358,20 @@ public actor NetToysHelperRuntime {
         _ anchor: SSHAnchorConfiguration,
         hostName: String
     ) async -> SSHAnchorConfiguration? {
-        guard let address = IPv4Address(hostName) else { return nil }
+        guard let address = IPv4Address(hostName),
+              await homeNetwork(for: anchor)?.contains(hostName) == true
+        else { return nil }
         let results = await scanner.scan(
             targets: [address],
             ports: [anchor.port],
             timeoutMilliseconds: 600,
             concurrency: 1
         )
-        return SSHAnchorRecovery.resolve(anchor: anchor, scanResults: results)
+        return await prove(SSHAnchorRecovery.resolve(anchor: anchor, scanResults: results), original: anchor)
     }
 
     private func discoverLocalCandidate(_ anchor: SSHAnchorConfiguration) async -> SSHAnchorConfiguration? {
-        let route = await DefaultRoute.load()
-        guard let network = LocalIPv4Network.active(preferredInterfaceName: route?.interfaceName),
+        guard let network = await homeNetwork(for: anchor),
               let targets = try? network.targets(limit: 1_024)
         else {
             scheduleRetry(for: anchor.id)
@@ -376,16 +380,62 @@ public actor NetToysHelperRuntime {
         let results = await scanner.scan(
             targets: targets,
             ports: [anchor.port],
-            timeoutMilliseconds: 600,
-            concurrency: 64
+            timeoutMilliseconds: 600
         )
-        guard let recovered = SSHAnchorRecovery.resolve(anchor: anchor, scanResults: results) else {
+        guard let recovered = await prove(
+            SSHAnchorRecovery.resolve(anchor: anchor, scanResults: results),
+            original: anchor
+        ) else {
             scheduleRetry(for: anchor.id)
             return nil
         }
         recoveryFailures[anchor.id] = nil
         nextRecovery[anchor.id] = nil
         return recovered
+    }
+
+    private func prove(_ move: SSHAnchorMove?, original: SSHAnchorConfiguration) async -> SSHAnchorConfiguration? {
+        let knownHosts = paths.knownHosts
+        let addresses = [original.hostName] + (original.localHostName.map { [$0] } ?? [])
+        // known_hosts stores a host on a port other than 22 as "[address]:port".
+        let names = [original.knownHostsAlias] + addresses
+            + (original.port == 22 ? [] : addresses.map { "[\($0)]:\(original.port)" })
+        return await SSHAnchorRecovery.proven(move) { host, port in
+            await SSHHostKeyProof.matches(host: host, port: port, names: names, knownHosts: knownHosts)
+        }
+    }
+
+    /// The subnet and router MAC of the joined network, so a café with the same 192.168.1.x range never matches.
+    private func currentHome() async -> (network: LocalIPv4Network, id: String)? {
+        guard let route = await DefaultRoute.load(),
+              let network = LocalIPv4Network.active(preferredInterfaceName: route.interfaceName),
+              network.contains(route.gateway),
+              let gateway = IPv4Address(route.gateway),
+              let mac = await ARPTable.load(addresses: [gateway], interfaceName: network.interfaceName)[route.gateway]
+        else { return nil }
+        return (network, "\(network.cidr)|\(AnchorMatcher.normalizedMAC(mac))")
+    }
+
+    /// The joined network when it is this anchor's home network; SSH Anchor never searches anywhere else.
+    private func homeNetwork(for anchor: SSHAnchorConfiguration) async -> LocalIPv4Network? {
+        guard let expected = anchor.homeNetwork, let home = await currentHome(), home.id == expected else { return nil }
+        return home.network
+    }
+
+    /// Records the home network the first time the host answers at its saved address on the joined network.
+    private func learnHomeNetwork(_ anchor: SSHAnchorConfiguration) async {
+        guard anchor.homeNetwork == nil, nextHomeCheck[anchor.id].map({ $0 <= Date() }) ?? true else { return }
+        nextHomeCheck[anchor.id] = Date().addingTimeInterval(60)
+        guard let home = await currentHome(), home.network.contains(anchor.hostName) else { return }
+        var learned = anchor
+        learned.homeNetwork = home.id
+        saveAnchorMetadata(learned, expectedHostName: anchor.hostName)
+    }
+
+    nonisolated static func awayFromHomeMessage(_ anchor: SSHAnchorConfiguration) -> String {
+        anchor.homeNetwork == nil
+            ? "SSH Anchor learns this host's home network the next time the host answers there."
+            : "SSH Anchor searches only this host's home network."
     }
 
     private func applyVerifiedChange(
