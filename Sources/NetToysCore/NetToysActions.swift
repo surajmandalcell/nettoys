@@ -155,6 +155,56 @@ nonisolated struct NetToysActionGate: Sendable {
     }
 }
 
+/// Writes each anchor's host key policy block once. An anchor counts as prepared only after the block
+/// is really in the file, so a dry run or a pause never leaves it marked done without the write.
+nonisolated struct SSHPolicyPreparer: Sendable {
+    private(set) var prepared = Set<UUID>()
+    private var dryRunLogged = Set<UUID>()
+    private var settingsKey: [String?] = []
+
+    mutating func keep(_ ids: Set<UUID>) {
+        prepared.formIntersection(ids)
+        dryRunLogged.formIntersection(ids)
+    }
+
+    /// Throws a failed write. `safeModeReason` is set when that failure starts safe mode.
+    mutating func prepare(_ anchor: SSHAnchorConfiguration, configURL: URL, backupDirectory: URL,
+                          gate: inout NetToysActionGate, settings: NetToysConfiguration, at now: TimeInterval,
+                          safeModeReason: inout String?) throws {
+        let key = [String(settings.actionsPaused), String(settings.dryRun), settings.safeModeReason]
+        if key != settingsKey {
+            settingsKey = key
+            prepared.removeAll()
+            dryRunLogged.removeAll()
+        }
+        guard !prepared.contains(anchor.id) else { return }
+        let current = try Data(contentsOf: configURL.resolvingSymlinksInPath())
+        let wanted = try SSHConfigEditor.preparingAnchor(in: current, hostAlias: anchor.hostAlias,
+                                                         knownHostsAlias: anchor.knownHostsAlias)
+        guard wanted != current else {
+            prepared.insert(anchor.id)
+            return
+        }
+        let summary = "Added the SSH Anchor host key policy for \(anchor.hostAlias)"
+        if NetToysActionGate.isHeld(settings) { return }
+        if settings.dryRun {
+            // Log once per dry run; the anchor stays unprepared so the write happens when dry run ends.
+            if dryRunLogged.insert(anchor.id).inserted { _ = gate.allows(.sshPolicy, summary, settings: settings) }
+            return
+        }
+        do {
+            _ = try SSHConfigFileUpdater.prepareAnchor(configURL: configURL, backupDirectory: backupDirectory,
+                                                       hostAlias: anchor.hostAlias,
+                                                       knownHostsAlias: anchor.knownHostsAlias)
+            _ = gate.finish(.sshPolicy, summary, error: nil, at: now)
+            prepared.insert(anchor.id)
+        } catch {
+            safeModeReason = gate.finish(.sshPolicy, summary, error: error, at: now)
+            throw error
+        }
+    }
+}
+
 /// The System row in the menu bar panel reads this.
 public nonisolated enum NetToysSystemHealth: Codable, Equatable, Sendable {
     case running

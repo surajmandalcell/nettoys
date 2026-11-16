@@ -140,5 +140,61 @@ final class NetToysGuardrailTests: XCTestCase {
         let entries = NetToysActionLog(url: paths.actionLog).entries()
         XCTAssertEqual(entries.map(\.outcome), [.dryRun])
         XCTAssertNil(NetToysActionLog(url: paths.actionLog).lastUndoable(), "A dry run has nothing to undo.")
+
+        // The policy block: held by the dry run (logged once), then written on the first pass after it ends.
+        var gateForPolicy = gate
+        var preparer = SSHPolicyPreparer()
+        var reason: String?
+        let anchor = SSHAnchorConfiguration(hostAlias: "jetson", hostName: "192.168.1.8", port: 22,
+                                            identity: .stableMAC("aa:bb:cc:dd:ee:ff"))
+        for _ in 0..<2 {
+            try preparer.prepare(anchor, configURL: config, backupDirectory: paths.backups, gate: &gateForPolicy,
+                                 settings: settings, at: 0, safeModeReason: &reason)
+        }
+        XCTAssertEqual(try Data(contentsOf: config), original)
+        XCTAssertFalse(preparer.prepared.contains(anchor.id))
+        XCTAssertEqual(NetToysActionLog(url: paths.actionLog).entries().filter { $0.kind == .sshPolicy }.count, 1)
+        settings.dryRun = false
+        try preparer.prepare(anchor, configURL: config, backupDirectory: paths.backups, gate: &gateForPolicy,
+                             settings: settings, at: 1, safeModeReason: &reason)
+        XCTAssertTrue(String(decoding: try Data(contentsOf: config), as: UTF8.self).contains("StrictHostKeyChecking"))
+        XCTAssertTrue(preparer.prepared.contains(anchor.id))
+    }
+
+    func testWiFiSwitchWaitsAfterWakeRestsAfterSwitchAndIgnoresLeaving() {
+        var monitor = WiFiFailoverMonitor()
+        // Outage on the joined network for 30 s: switch.
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, ssid: "Home", threshold: 30, at: 100))
+        XCTAssertTrue(monitor.shouldAttempt(isFailure: true, ssid: "Home", threshold: 30, at: 130))
+        monitor.didAttempt(at: 130)
+        monitor.didSwitch(to: "Backup", at: 130, cooldown: 600)
+        // Backup is down too, but the rest after a switch holds the next one for 10 minutes.
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, ssid: "Backup", threshold: 30, at: 140))
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, ssid: "Backup", threshold: 30, at: 729))
+        XCTAssertTrue(monitor.shouldAttempt(isFailure: true, ssid: "Backup", threshold: 30, at: 731))
+
+        // Wake: the outage timer from before sleep is gone, and the wait after wake holds switches for 60 s.
+        var wake = WiFiFailoverMonitor()
+        XCTAssertFalse(wake.shouldAttempt(isFailure: true, ssid: "Home", threshold: 30, at: 0))
+        wake.didWake(at: 10, wait: 60)
+        XCTAssertNil(wake.outageBeganAt)
+        XCTAssertFalse(wake.shouldAttempt(isFailure: true, ssid: "Home", threshold: 30, at: 10))
+        XCTAssertFalse(wake.shouldAttempt(isFailure: true, ssid: "Home", threshold: 30, at: 45))
+        XCTAssertTrue(wake.shouldAttempt(isFailure: true, ssid: "Home", threshold: 30, at: 71))
+
+        // Leaving on purpose (Wi-Fi off) or joining another network yourself is not an outage.
+        var leave = WiFiFailoverMonitor()
+        XCTAssertFalse(leave.shouldAttempt(isFailure: true, ssid: "Home", threshold: 30, at: 0))
+        XCTAssertFalse(leave.shouldAttempt(isFailure: false, left: true, threshold: 30, at: 20))
+        XCTAssertNil(leave.outageBeganAt)
+        XCTAssertFalse(leave.shouldAttempt(isFailure: true, ssid: "Cafe", threshold: 30, at: 40))
+        XCTAssertNil(leave.outageBeganAt, "A network the person joined starts a fresh count.")
+
+        // Sleep shows as wall time passing while the monotonic clock stands still.
+        var sleep = SleepDetector()
+        let wall = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertFalse(sleep.didWake(wall: wall, uptime: 50))
+        XCTAssertFalse(sleep.didWake(wall: wall + 5, uptime: 55))
+        XCTAssertTrue(sleep.didWake(wall: wall + 3_605, uptime: 60))
     }
 }

@@ -65,9 +65,10 @@ public actor NetToysHelperRuntime {
     private var nextRecovery: [UUID: Date] = [:]
     private var routeMonitors: [UUID: SSHAnchorRouteMonitor] = [:]
     private var nextTailscaleAttempt: [UUID: Date] = [:]
-    private var preparedAnchorPolicies = Set<UUID>()
+    private var policyPreparer = SSHPolicyPreparer()
     private var historyRecorder = NetworkTransitionRecorder()
-    private var lastHistoryCheck = Date.distantPast
+    private var lastNetworkCheck: TimeInterval?
+    private var sleepDetector = SleepDetector()
     private var networkSnapshot: NetworkRuntimeSnapshot?
     private var currentStatuses: [SSHAnchorStatus] = []
     private var ssidAccess: NetToysSSIDAccessState?
@@ -105,11 +106,7 @@ public actor NetToysHelperRuntime {
             try await body()
             _ = gate.finish(kind, summary, undo: undo, error: nil, at: uptime())
         } catch {
-            if let reason = gate.finish(kind, summary, error: error, at: uptime()) {
-                if let saved = try? NetToysConfigurationStore.update({ $0.safeModeReason = reason }) {
-                    cachedConfiguration = saved
-                }
-            }
+            if let reason = gate.finish(kind, summary, error: error, at: uptime()) { enterSafeMode(reason) }
             throw error
         }
     }
@@ -163,7 +160,7 @@ public actor NetToysHelperRuntime {
         nextRecovery = nextRecovery.filter { activeAnchorIDs.contains($0.key) }
         routeMonitors = routeMonitors.filter { activeAnchorIDs.contains($0.key) }
         nextTailscaleAttempt = nextTailscaleAttempt.filter { activeAnchorIDs.contains($0.key) }
-        preparedAnchorPolicies.formIntersection(activeAnchorIDs)
+        policyPreparer.keep(activeAnchorIDs)
         if !configuration.anchors.isEmpty, Date() >= nextSnapshotCheck {
             nextSnapshotCheck = Date().addingTimeInterval(3_600)
             NetToysSSHBackups.snapshotIfDue(configURL: paths.sshConfig, in: paths.backups)
@@ -181,13 +178,15 @@ public actor NetToysHelperRuntime {
                     : status(anchor, .idle)
             )
         }
-        // Wi-Fi Priority probes every 10 s, and on every tick while a failover can still follow.
-        let sinceLastCheck = Date().timeIntervalSince(lastHistoryCheck)
-        let failoverPending = wifiFailoverMonitor.outageBeganAt != nil
-            && wifiFailoverMonitor.attempts < configuration.wifiPriority.ssids.count
-        if (configuration.wifiPriority.isEnabled && (failoverPending || sinceLastCheck >= 10))
-            || (configuration.recordsNetworkHistory && sinceLastCheck >= 30) {
-            lastHistoryCheck = Date()
+        let now = uptime()
+        if sleepDetector.didWake(wall: Date(), uptime: now) {
+            wifiFailoverMonitor.didWake(at: now, wait: configuration.wifiPriority.waitAfterWake)
+        }
+        // The background network check runs every 30 s, every 60 s on battery.
+        let networkInterval: TimeInterval = PowerSource.isOnBattery() ? 60 : 30
+        if (configuration.wifiPriority.isEnabled || configuration.recordsNetworkHistory),
+           lastNetworkCheck.map({ now - $0 >= networkInterval }) ?? true {
+            lastNetworkCheck = now
             await checkNetwork(configuration)
         } else if !configuration.wifiPriority.isEnabled {
             wifiFailoverMonitor = WiFiFailoverMonitor()
@@ -204,7 +203,7 @@ public actor NetToysHelperRuntime {
             return status(configuredAnchor, open ? .healthy : .unavailable, open ? nil : "Automatic actions are paused.")
         }
         do {
-            try await prepareHostKeyPolicy(configuredAnchor)
+            try prepareHostKeyPolicy(configuredAnchor)
         } catch {
             return status(configuredAnchor, .error, error.localizedDescription)
         }
@@ -537,25 +536,17 @@ public actor NetToysHelperRuntime {
         return copy
     }
 
-    private func prepareHostKeyPolicy(_ anchor: SSHAnchorConfiguration) async throws {
-        guard !preparedAnchorPolicies.contains(anchor.id) else { return }
-        let configURL = paths.sshConfig
-        let backups = paths.backups
-        let current = try Data(contentsOf: configURL.resolvingSymlinksInPath())
-        let prepared = try SSHConfigEditor.preparingAnchor(in: current, hostAlias: anchor.hostAlias,
-                                                           knownHostsAlias: anchor.knownHostsAlias)
-        if prepared != current {
-            do {
-                try await perform(.sshPolicy, "Added the SSH Anchor host key policy for \(anchor.hostAlias)") {
-                    _ = try SSHConfigFileUpdater.prepareAnchor(configURL: configURL, backupDirectory: backups,
-                                                               hostAlias: anchor.hostAlias,
-                                                               knownHostsAlias: anchor.knownHostsAlias)
-                }
-            } catch let held as ActionHeld where held.dryRun {
-                // Logged once; the dry run goes on without the policy block.
-            }
+    private func prepareHostKeyPolicy(_ anchor: SSHAnchorConfiguration) throws {
+        var reason: String?
+        defer { if let reason { enterSafeMode(reason) } }
+        try policyPreparer.prepare(anchor, configURL: paths.sshConfig, backupDirectory: paths.backups, gate: &gate,
+                                   settings: cachedConfiguration, at: uptime(), safeModeReason: &reason)
+    }
+
+    private func enterSafeMode(_ reason: String) {
+        if let saved = try? NetToysConfigurationStore.update({ $0.safeModeReason = reason }) {
+            cachedConfiguration = saved
         }
-        preparedAnchorPolicies.insert(anchor.id)
     }
 
     private func scheduleRetry(for id: UUID) {
@@ -574,10 +565,12 @@ public actor NetToysHelperRuntime {
                 internet: .unknown,
                 shouldRecordHistory: configuration.recordsNetworkHistory
             )
+            // No route means Wi-Fi is off or not joined: leaving a network is not an outage.
             await updateWiFiFailover(
                 configuration.wifiPriority,
                 currentSSID: nil,
-                isFailure: true,
+                isFailure: false,
+                left: true,
                 hasActiveRoute: false
             )
             return
@@ -599,6 +592,7 @@ public actor NetToysHelperRuntime {
             configuration.wifiPriority,
             currentSSID: ssid,
             isFailure: WiFiFailoverMonitor.isOutage(internet: internetState, gateway: gatewayState),
+            left: NetworkSSID.isWiFiOff(),
             hasActiveRoute: true
         )
     }
@@ -607,12 +601,21 @@ public actor NetToysHelperRuntime {
         _ configuration: WiFiPriorityConfiguration,
         currentSSID: String?,
         isFailure: Bool,
+        left: Bool,
         hasActiveRoute: Bool
     ) async {
         guard configuration.isEnabled else { return }
         let date = Date()
         guard !NetToysActionGate.isHeld(cachedConfiguration) else {
             wifiFailoverStatus = WiFiFailoverStatus(state: .monitoring, message: "Automatic actions are paused.",
+                                                    updatedAt: date)
+            return
+        }
+        guard !left else {
+            _ = wifiFailoverMonitor.shouldAttempt(isFailure: false, left: true, threshold: configuration.outageThreshold,
+                                                  at: uptime())
+            wifiFailoverStatus = WiFiFailoverStatus(state: .monitoring,
+                                                    message: "Wi-Fi is off or not joined. This is not an outage.",
                                                     updatedAt: date)
             return
         }
@@ -624,18 +627,23 @@ public actor NetToysHelperRuntime {
             )
             return
         }
+        let now = uptime()
         guard wifiFailoverMonitor.shouldAttempt(
             isFailure: isFailure,
+            ssid: currentSSID,
             threshold: configuration.outageThreshold,
             maximumAttempts: configuration.ssids.count,
-            at: date
+            at: now
         ) else {
             let attempts = wifiFailoverMonitor.attempts
             let exhausted = isFailure && attempts > 0 && attempts >= configuration.ssids.count
+            let resting = isFailure && now < wifiFailoverMonitor.holdUntil
             wifiFailoverStatus = WiFiFailoverStatus(
                 state: exhausted ? .failed : isFailure ? .waiting : .monitoring,
                 message: exhausted
                     ? "Every saved Wi-Fi network was tried. Waiting for the connection to return."
+                    : resting
+                    ? "Internet is unavailable. Waiting after wake or a recent switch."
                     : isFailure
                     ? "Internet is unavailable. Waiting before failover."
                     : "Internet is reachable.",
@@ -643,7 +651,7 @@ public actor NetToysHelperRuntime {
             )
             return
         }
-        wifiFailoverMonitor.didAttempt(at: date)
+        wifiFailoverMonitor.didAttempt(at: now)
         wifiFailoverStatus = WiFiFailoverStatus(
             state: .switching,
             message: "Looking for the next saved Wi-Fi network.",
@@ -668,14 +676,17 @@ public actor NetToysHelperRuntime {
                               undo: currentSSID.map { .wifi(previousSSID: $0) }) {
                 try await WiFiNetworkController.join(target)
             }
+            wifiFailoverMonitor.didSwitch(to: target, at: uptime(), cooldown: configuration.cooldownAfterSwitch)
             wifiFailoverStatus = WiFiFailoverStatus(
                 state: .switching,
                 message: "Joined \(target). Checking Internet access.",
                 updatedAt: Date()
             )
         } catch {
+            // A held join (dry run) changed nothing, so it must not use up a network in the rotation.
+            if error is ActionHeld { wifiFailoverMonitor.didSkipAttempt() }
             wifiFailoverStatus = WiFiFailoverStatus(
-                state: .failed,
+                state: error is ActionHeld ? .monitoring : .failed,
                 message: error.localizedDescription,
                 updatedAt: Date()
             )

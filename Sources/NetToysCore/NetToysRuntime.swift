@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 @preconcurrency import CoreWLAN
+import IOKit.ps
 
 public nonisolated enum SSHKeyAccessError: LocalizedError {
     case unsafeAlias
@@ -714,7 +715,8 @@ public nonisolated struct NetToysConfiguration: Codable, Equatable, Sendable {
         dryRun: Bool = false,
         safeModeReason: String? = nil
     ) {
-        self.probeInterval = min(max(probeInterval, 2), 3)
+        // The SSH Anchor probe runs every 5 s; the stored value stays only so older files still decode.
+        self.probeInterval = 5
         self.sshAnchorEnabled = sshAnchorEnabled
         self.anchors = Array(anchors.prefix(16))
         self.recordsNetworkHistory = recordsNetworkHistory
@@ -793,10 +795,17 @@ public nonisolated struct WiFiPriorityConfiguration: Codable, Equatable, Sendabl
     public var outageThreshold: TimeInterval
     public var ssids: [String]
 
+    /// Seconds to wait after the Mac wakes before any switch.
+    public var waitAfterWake: TimeInterval
+    /// Seconds of rest after a switch before the next one.
+    public var cooldownAfterSwitch: TimeInterval
+
     public init(
         isEnabled: Bool = false,
         outageThreshold: TimeInterval = 30,
-        ssids: [String] = []
+        ssids: [String] = [],
+        waitAfterWake: TimeInterval = 60,
+        cooldownAfterSwitch: TimeInterval = 600
     ) {
         self.isEnabled = isEnabled
         // A shorter outage window let a brief probe failure drop a working network.
@@ -804,6 +813,8 @@ public nonisolated struct WiFiPriorityConfiguration: Codable, Equatable, Sendabl
         self.ssids = Array(
             ssids.compactMap(NetworkIdentity.normalizedSSID).uniqued().prefix(16)
         )
+        self.waitAfterWake = min(max(waitAfterWake, 0), 600)
+        self.cooldownAfterSwitch = min(max(cooldownAfterSwitch, 60), 3_600)
     }
 
     public init(from decoder: Decoder) throws {
@@ -811,15 +822,22 @@ public nonisolated struct WiFiPriorityConfiguration: Codable, Equatable, Sendabl
         self.init(
             isEnabled: try values.decode(Bool.self, forKey: .isEnabled),
             outageThreshold: try values.decode(TimeInterval.self, forKey: .outageThreshold),
-            ssids: try values.decode([String].self, forKey: .ssids)
+            ssids: try values.decode([String].self, forKey: .ssids),
+            waitAfterWake: try values.decodeIfPresent(TimeInterval.self, forKey: .waitAfterWake) ?? 60,
+            cooldownAfterSwitch: try values.decodeIfPresent(TimeInterval.self, forKey: .cooldownAfterSwitch) ?? 600
         )
     }
 }
 
+/// Times run on a monotonic clock (seconds of uptime), so a wall-clock jump never ends a wait early.
 nonisolated struct WiFiFailoverMonitor: Sendable {
-    private(set) var outageBeganAt: Date?
-    private(set) var lastAttemptAt: Date?
+    private(set) var outageBeganAt: TimeInterval?
+    private(set) var lastAttemptAt: TimeInterval?
     private(set) var attempts = 0
+    /// No switch before this time: the wait after wake or the rest after a switch.
+    private(set) var holdUntil: TimeInterval = 0
+    private var lastSSID: String?
+    private var switchedTo: String?
 
     /// An outage needs both a failed Internet probe and a gateway that does not answer.
     static func isOutage(internet: NetworkReachability, gateway: NetworkReachability) -> Bool {
@@ -827,29 +845,55 @@ nonisolated struct WiFiFailoverMonitor: Sendable {
     }
 
     /// `maximumAttempts` stops rotation after one pass through the priority list.
+    /// `left` means Wi-Fi is off or not joined: leaving on purpose is never an outage.
     mutating func shouldAttempt(
         isFailure: Bool,
+        ssid: String? = nil,
+        left: Bool = false,
         threshold: TimeInterval,
         maximumAttempts: Int = .max,
-        at date: Date
+        at now: TimeInterval
     ) -> Bool {
-        guard isFailure else {
-            outageBeganAt = nil
-            lastAttemptAt = nil
-            attempts = 0
+        // A network the person joined (not one NetToys switched to) starts a fresh outage count.
+        let joinedByPerson = ssid != nil && lastSSID != nil && ssid != lastSSID && ssid != switchedTo
+        if let ssid { lastSSID = ssid }
+        guard isFailure, !left, !joinedByPerson else {
+            resetOutage()
             return false
         }
         guard let outageBeganAt else {
-            self.outageBeganAt = date
+            self.outageBeganAt = now
             return false
         }
-        guard date.timeIntervalSince(outageBeganAt) >= threshold, attempts < maximumAttempts else { return false }
-        return lastAttemptAt.map { date.timeIntervalSince($0) >= 30 } ?? true
+        guard now >= holdUntil, now - outageBeganAt >= threshold, attempts < maximumAttempts else { return false }
+        return lastAttemptAt.map { now - $0 >= 30 } ?? true
     }
 
-    mutating func didAttempt(at date: Date) {
-        lastAttemptAt = date
+    mutating func didAttempt(at now: TimeInterval) {
+        lastAttemptAt = now
         attempts += 1
+    }
+
+    /// The attempt was held (dry run); keep the 30 s spacing but give the network back to the rotation.
+    mutating func didSkipAttempt() {
+        attempts = max(attempts - 1, 0)
+    }
+
+    mutating func didSwitch(to ssid: String, at now: TimeInterval, cooldown: TimeInterval) {
+        switchedTo = ssid
+        holdUntil = max(holdUntil, now + cooldown)
+    }
+
+    /// After sleep the outage timer from before means nothing.
+    mutating func didWake(at now: TimeInterval, wait: TimeInterval) {
+        resetOutage()
+        holdUntil = max(holdUntil, now + wait)
+    }
+
+    private mutating func resetOutage() {
+        outageBeganAt = nil
+        lastAttemptAt = nil
+        attempts = 0
     }
 
     static func nextSSID(
@@ -1060,9 +1104,33 @@ package nonisolated struct NetworkIdentity: Equatable, Sendable {
     }
 }
 
+/// The wall clock runs on during sleep and the monotonic clock does not; a gap between them means the Mac woke.
+nonisolated struct SleepDetector: Sendable {
+    private var last: (wall: Date, uptime: TimeInterval)?
+
+    mutating func didWake(wall: Date, uptime: TimeInterval) -> Bool {
+        defer { last = (wall, uptime) }
+        guard let last else { return false }
+        return wall.timeIntervalSince(last.wall) - (uptime - last.uptime) > 10
+    }
+}
+
+nonisolated enum PowerSource {
+    static func isOnBattery() -> Bool {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let type = IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue()
+        else { return false }
+        return (type as String) == kIOPSBatteryPowerValue
+    }
+}
+
 package nonisolated enum NetworkSSID {
     package static func isWiFi(interfaceName: String) -> Bool {
         CWWiFiClient.shared().interface(withName: interfaceName) != nil
+    }
+
+    static func isWiFiOff() -> Bool {
+        CWWiFiClient.shared().interface()?.powerOn() == false
     }
 
     package static func current(interfaceName: String) -> String? {

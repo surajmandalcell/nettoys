@@ -1077,7 +1077,7 @@ final class NetToysTests: XCTestCase {
             keyAccessVerifiedAt: Date(timeIntervalSinceReferenceDate: 500)
         )
         let configuration = NetToysConfiguration(probeInterval: 8, anchors: [anchor], recordsNetworkHistory: true)
-        XCTAssertEqual(configuration.probeInterval, 3)
+        XCTAssertEqual(configuration.probeInterval, 5)
         XCTAssertEqual(
             try JSONDecoder().decode(NetToysConfiguration.self, from: JSONEncoder().encode(configuration)),
             configuration
@@ -1246,11 +1246,11 @@ final class NetToysTests: XCTestCase {
             ["Batcave2.4G", "BatcaveAlt"]
         )
 
-        let startedAt = Date(timeIntervalSince1970: 1_000)
+        let startedAt: TimeInterval = 1_000
         var monitor = WiFiFailoverMonitor()
         XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt))
-        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt.addingTimeInterval(9)))
-        XCTAssertTrue(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt.addingTimeInterval(10)))
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt + 9))
+        XCTAssertTrue(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt + 10))
         XCTAssertEqual(
             WiFiFailoverMonitor.nextSSID(
                 after: "Batcave2.4G",
@@ -1267,10 +1267,10 @@ final class NetToysTests: XCTestCase {
             ),
             "Batcave2.4G"
         )
-        monitor.didAttempt(at: startedAt.addingTimeInterval(10))
-        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt.addingTimeInterval(20)))
-        XCTAssertFalse(monitor.shouldAttempt(isFailure: false, threshold: 10, at: startedAt.addingTimeInterval(21)))
-        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt.addingTimeInterval(22)))
+        monitor.didAttempt(at: startedAt + 10)
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt + 20))
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: false, threshold: 10, at: startedAt + 21))
+        XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 10, at: startedAt + 22))
     }
 
     func testWiFiOutageNeedsInternetAndGatewayFailure() {
@@ -1284,7 +1284,7 @@ final class NetToysTests: XCTestCase {
     }
 
     func testWiFiFailoverStopsAfterOnePassThroughPriorities() {
-        let start = Date(timeIntervalSince1970: 1_000)
+        let start: TimeInterval = 1_000
         var monitor = WiFiFailoverMonitor()
         XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 30, maximumAttempts: 2, at: start))
         XCTAssertTrue(monitor.shouldAttempt(isFailure: true, threshold: 30, maximumAttempts: 2, at: start + 30))
