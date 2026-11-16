@@ -181,7 +181,7 @@ final class NetToysAnchorViewModel {
                 savedConfiguration = configuration
                 guard await host.loginItems.setEnabled(true) else {
                     errorMessage = host.loginItems.errorMessage
-                        ?? "The Sam's NetToys helper could not be enabled."
+                        ?? "Monitoring could not be turned on."
                     return
                 }
                 await refresh()
@@ -548,15 +548,15 @@ struct NetToysAnchorView: View {
     }
 
     private var helperStatus: some View {
-        OnePlusStatus(model.helperIsHealthy ? "Helper Active" : "Helper Inactive",
+        OnePlusStatus(model.helperIsHealthy ? "Monitoring" : "Monitoring is off",
                       state: model.helperIsHealthy ? .online : .offline)
     }
 
     private var helperCard: some View {
         VStack(spacing: OnePlusMetrics.cardGap) {
             if !model.helperIsHealthy {
-                OnePlusBanner("The login helper is not active. Enable it to monitor your saved anchors.", tone: .warning) {
-                    Button("Enable helper") {
+                OnePlusBanner("Monitoring is off. Turn it on to watch your saved anchors.", tone: .warning) {
+                    Button("Turn On Monitoring") {
                         Task {
                             _ = await model.host.loginItems.setEnabled(true)
                             await model.refresh()

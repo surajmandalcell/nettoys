@@ -443,7 +443,7 @@ struct NetToysHistoryView: View {
         OnePlusPage(scrolls: false) {
             OnePlusPageHeader(
                 title: "Network History",
-                subtitle: model.helperStatus?.network?.displayName ?? "Waiting for the helper"
+                subtitle: model.helperStatus?.network?.displayName ?? "Waiting for monitoring"
             ) {
                 if model.isLoading { ProgressView().controlSize(.small).accessibilityLabel("Loading network history") }
                 Toggle("Record history", isOn: Binding(
@@ -693,10 +693,10 @@ struct NetToysHistoryView: View {
               snapshot.networkID != "disconnected"
         else { return nil }
         if model.helperStatus?.ssidAccess == .notDetermined {
-            return "Sam's NetToys Helper is waiting for its Location permission. Respond to the macOS prompt or open Location Settings."
+            return "Sam's NetToys is waiting for its Location permission. Respond to the macOS prompt or open Location Settings."
         }
         if model.helperStatus?.ssidAccess == .denied || model.helperStatus?.ssidAccess == .restricted {
-            return "Allow Sam's NetToys Helper in Location Services so background history can record Wi-Fi names."
+            return "Allow Sam's NetToys in Location Services so history can record Wi-Fi names."
         }
         if model.locationRequestFailed {
             return "macOS blocked the Location request. Open Location Services to allow \(model.host.displayName)."
@@ -705,7 +705,7 @@ struct NetToysHistoryView: View {
         case .denied, .restricted:
             return "Allow Location access in System Settings to label Wi-Fi history with the network name."
         case .authorized, .authorizedAlways:
-            return "The Wi-Fi network name is not available from the background helper."
+            return "The Wi-Fi network name is not available to monitoring."
         default:
             return "Allow Location access to label Wi-Fi history with the network name."
         }
@@ -746,7 +746,7 @@ public struct NetToysSettingsView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: OnePlusMetrics.cardGap) {
-            OnePlusSettingRow("Sam's NetToys Helper", help: "Keep SSH Anchor, Wi-Fi failover, and network history available.", separator: false) {
+            OnePlusSettingRow("Monitoring", help: "Keep SSH Anchor, Wi-Fi failover, and network history available.", separator: false) {
                 HStack(spacing: OnePlusMetrics.actionSpacing) {
                     if model.isLoading {
                         ProgressView().controlSize(.small).accessibilityLabel("Loading network settings")
@@ -860,13 +860,13 @@ public struct NetToysSettingsView: View {
 
     private var locationStatusMessage: String {
         if model.helperStatus?.ssidAccess == .notDetermined {
-            return "Sam's NetToys Helper is waiting for its Location permission so it can record SSIDs in the background."
+            return "Sam's NetToys is waiting for its Location permission so it can record Wi-Fi names."
         }
         if model.helperStatus?.ssidAccess == .denied || model.helperStatus?.ssidAccess == .restricted {
-            return "Enable Sam's NetToys Helper in Privacy & Security > Location Services to record SSIDs in the background."
+            return "Enable Sam's NetToys in Privacy & Security > Location Services to record Wi-Fi names."
         }
         if model.helperSSIDUnavailable {
-            return "Location access is allowed, but Sam's NetToys Helper could not read the current Wi-Fi name. Check Location Services and try again."
+            return "Location access is allowed, but Sam's NetToys could not read the current Wi-Fi name. Check Location Services and try again."
         }
         if model.locationRequestFailed {
             return "macOS blocked the Location request. Open Privacy & Security > Location Services and allow \(host.displayName)."
@@ -1076,7 +1076,7 @@ private struct NetworkUptimeTimeline: View {
         VStack(alignment: .leading, spacing: OnePlusMetrics.actionSpacing) {
             if presentation.summaries.isEmpty {
                 OnePlusEmptyState("No uptime data", systemImage: "clock",
-                                  caption: "Network uptime appears after the helper records a network change.")
+                                  caption: "Network uptime appears after monitoring records a network change.")
             } else {
                 if presentation.summaries.count == 1 {
                     summaryRows
