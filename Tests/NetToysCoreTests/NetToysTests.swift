@@ -703,21 +703,54 @@ final class NetToysTests: XCTestCase {
         XCTAssertEqual(NetToysScanner.reportedFilteredPorts([22, 443], reachable: false), [])
     }
 
-    func testPingProbeParsesMacOSPacketLossLatencyAndTTL() {
-        let output = """
-        PING 10.0.0.2 (10.0.0.2): 56 data bytes
-        64 bytes from 10.0.0.2: icmp_seq=0 ttl=63 time=0.200 ms
-        64 bytes from 10.0.0.2: icmp_seq=1 ttl=63 time=0.400 ms
+    func testPingProbeSummarizesEchoRepliesIntoLossLatencyAndTTL() {
+        let replies = [ICMPEcho.Reply(ttl: 63, milliseconds: 0.2), ICMPEcho.Reply(ttl: 63, milliseconds: 0.4)]
+        let result = PingProbe.result(replies: replies, sent: 4)
+        XCTAssertEqual(result.ttl, 63)
+        XCTAssertEqual(result.packetLossPercent, 50)
+        XCTAssertEqual(try XCTUnwrap(result.averageMilliseconds), 0.3, accuracy: 0.000_1)
+        XCTAssertEqual(PingProbe.result(replies: [], sent: 1),
+                       PingProbeResult(ttl: nil, packetLossPercent: 100, averageMilliseconds: nil))
+    }
 
-        --- 10.0.0.2 ping statistics ---
-        3 packets transmitted, 2 packets received, 33.3% packet loss
-        round-trip min/avg/max/stddev = 0.200/0.300/0.400/0.100 ms
-        """
+    func testICMPEchoEncodesRequestWithValidChecksum() {
+        let request = ICMPEcho.encodeRequest(identifier: 0x1234, sequence: 0xABCD)
+        XCTAssertEqual(Array(request[0..<2]), [8, 0])
+        XCTAssertEqual(Array(request[4..<8]), [0x12, 0x34, 0xAB, 0xCD])
+        XCTAssertEqual(ICMPEcho.checksum(request), 0)
+        // RFC 1071 worked example.
+        XCTAssertEqual(ICMPEcho.checksum([0x00, 0x01, 0xF2, 0x03, 0xF4, 0xF5, 0xF6, 0xF7]), ~UInt16(0xDDF2))
+        XCTAssertEqual(ICMPEcho.checksum([0xFF]), 0x00FF)
+    }
 
-        XCTAssertEqual(
-            PingProbe.parse(output),
-            PingProbeResult(ttl: 63, packetLossPercent: 33.3, averageMilliseconds: 0.3)
-        )
+    func testICMPEchoDecodesReplyAfterIPv4HeaderAndMatchesIdentifierSequenceAndSource() throws {
+        var icmp = ICMPEcho.encodeRequest(identifier: 0x1234, sequence: 7)
+        icmp[0] = 0 // echo reply
+        icmp[2] = 0
+        icmp[3] = 0
+        let sum = ICMPEcho.checksum(icmp)
+        icmp[2] = UInt8(sum >> 8)
+        icmp[3] = UInt8(sum & 0xff)
+        var header = [UInt8](repeating: 0, count: 20)
+        header[0] = 0x45
+        header[8] = 63
+        header[12...15] = [10, 0, 0, 2]
+        let packet = try XCTUnwrap(ICMPEcho.decode(header + icmp))
+        XCTAssertEqual(packet, ICMPEcho.Packet(source: 0x0A00_0002, ttl: 63, type: 0, identifier: 0x1234, sequence: 7))
+        XCTAssertEqual(ICMPEcho.decode(icmp)?.source, nil)
+
+        let host: UInt32 = 0x0A00_0002
+        XCTAssertTrue(ICMPEcho.matches(packet, identifier: 0x1234, sequence: 7, address: host))
+        XCTAssertFalse(ICMPEcho.matches(packet, identifier: 0x1235, sequence: 7, address: host))
+        XCTAssertFalse(ICMPEcho.matches(packet, identifier: 0x1234, sequence: 8, address: host))
+        XCTAssertFalse(ICMPEcho.matches(packet, identifier: 0x1234, sequence: 7, address: 0x0A00_0003))
+        let request = try XCTUnwrap(ICMPEcho.decode(header + ICMPEcho.encodeRequest(identifier: 0x1234, sequence: 7)))
+        XCTAssertFalse(ICMPEcho.matches(request, identifier: 0x1234, sequence: 7, address: host))
+
+        var corrupt = header + icmp
+        corrupt[corrupt.count - 1] ^= 0xFF
+        XCTAssertNil(ICMPEcho.decode(corrupt))
+        XCTAssertNil(ICMPEcho.decode([0x45, 0, 0]))
     }
 
     func testLivenessControlsAdaptTCPTimeoutAndGatePortScans() {
@@ -1294,17 +1327,6 @@ final class NetToysTests: XCTestCase {
         XCTAssertFalse(monitor.shouldAttempt(isFailure: true, threshold: 30, maximumAttempts: 2, at: start + 300))
         XCTAssertFalse(monitor.shouldAttempt(isFailure: false, threshold: 30, maximumAttempts: 2, at: start + 301))
         XCTAssertEqual(monitor.attempts, 0)
-    }
-
-    func testPingProbeHasOwnDeadlineAndKillTimeout() throws {
-        let address = try XCTUnwrap(IPv4Address("192.168.1.1"))
-        let plan = PingProbe.invocation(address: address, count: 2, timeoutMilliseconds: 750)
-        XCTAssertEqual(plan.arguments, ["-n", "-c", "2", "-W", "750", "-t", "3", "192.168.1.1"])
-        XCTAssertEqual(plan.killAfter, 4)
-        let longest = PingProbe.invocation(address: address, count: 9, timeoutMilliseconds: 9_000)
-        XCTAssertEqual(longest.arguments[5...6], ["-t", "26"])
-        XCTAssertEqual(longest.killAfter, 27)
-        XCTAssertLessThanOrEqual(PingProbe.maximumConcurrent, 16)
     }
 
     func testReplacingAnchorPreservesOtherConfiguration() throws {

@@ -901,21 +901,10 @@ public actor NetToysHelperRuntime {
 nonisolated enum NetworkProbe {
     /// Reachability and the round trip in ms.
     static func gateway(_ host: String) async -> (NetworkReachability, Double?) {
-        do {
-            let result = try await SSHProcessRunner.run(
-                executableURL: URL(fileURLWithPath: "/sbin/ping"),
-                arguments: ["-n", "-c", "1", "-W", "1000", "-t", "2", host],
-                environment: ProcessInfo.processInfo.environment.merging(["LC_ALL": "C"]) { _, new in new },
-                maximumOutputBytes: 65_536,
-                timeout: 4
-            )
-            guard result.status == 0 else { return (.unreachable, nil) }
-            return (.reachable, PingProbe.parse(result.standardOutput)?.averageMilliseconds)
-        } catch SSHKeyAccessError.timeout {
-            return (.unreachable, nil)
-        } catch {
-            return (.unknown, nil)
-        }
+        guard let address = IPv4Address(host),
+              let ping = await PingProbe.check(address: address, count: 1, timeoutMilliseconds: 1_000)
+        else { return (.unknown, nil) }
+        return ping.averageMilliseconds.map { (.reachable, $0) } ?? (.unreachable, nil)
     }
 
     static func internet() async -> NetworkReachability {

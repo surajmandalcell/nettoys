@@ -67,12 +67,10 @@ public struct NetToysTraySnapshot: Sendable {
             result.localNetwork = local.0?.interfaceName == route.interfaceName ? local.0 : nil
             result.ssid = local.1
             guard !Task.isCancelled else { return result }
-            let ping = try? await TailscalePeerCatalog.runStatusCommand(
-                executableURL: URL(fileURLWithPath: "/sbin/ping"), arguments: ["-n", "-c", "1", "-W", "1000", route.gateway],
-                environment: ProcessInfo.processInfo.environment.merging(["LC_ALL": "C"]) { _, new in new },
-                maximumOutputBytes: 8_192, timeout: 2
-            )
-            result.gatewayMilliseconds = ping.flatMap { PingProbe.parse(String(decoding: $0, as: UTF8.self))?.averageMilliseconds }
+            if let gateway = IPv4Address(route.gateway) {
+                result.gatewayMilliseconds = await PingProbe.check(address: gateway, count: 1, timeoutMilliseconds: 1_000)?
+                    .averageMilliseconds
+            }
         }
         return result
     }

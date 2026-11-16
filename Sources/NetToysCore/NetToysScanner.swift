@@ -275,82 +275,32 @@ nonisolated struct AdaptiveConcurrency: Sendable {
     }
 }
 
-/// A counting semaphore that bounds concurrent subprocesses for async callers.
-actor ProcessGate {
-    private var available: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    init(limit: Int) { available = max(limit, 1) }
-
-    func acquire() async {
-        guard available == 0 else { available -= 1; return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-
-    func release() {
-        if waiters.isEmpty { available += 1 } else { waiters.removeFirst().resume() }
-    }
-}
-
 package nonisolated enum PingProbe {
-    /// At most this many ping subprocesses run at once, whatever the scan concurrency.
-    static let maximumConcurrent = 16
-    private static let gate = ProcessGate(limit: maximumConcurrent)
-
-    static func check(
+    /// Sends `count` echoes at once over the shared ICMP socket; nil only when the socket cannot open.
+    package static func check(
         address: IPv4Address,
         count: Int,
         timeoutMilliseconds: Int
     ) async -> PingProbeResult? {
-        let plan = invocation(address: address, count: count, timeoutMilliseconds: timeoutMilliseconds)
-        await gate.acquire()
-        let result = try? await SSHProcessRunner.run(
-            executableURL: URL(fileURLWithPath: "/sbin/ping"),
-            arguments: plan.arguments,
-            environment: ProcessInfo.processInfo.environment.merging(["LC_ALL": "C"]) { _, new in new },
-            maximumOutputBytes: 65_536,
-            timeout: plan.killAfter
-        )
-        await gate.release()
-        guard let result else { return nil }
-        return parse(result.standardOutput + result.standardError)
-    }
-
-    /// ping's own `-t` deadline ends the probe; the runner kills it one second later if it hangs.
-    static func invocation(
-        address: IPv4Address,
-        count: Int,
-        timeoutMilliseconds: Int
-    ) -> (arguments: [String], killAfter: TimeInterval) {
+        guard ICMPEcho.isAvailable else { return nil }
         let count = min(max(count, 1), 5)
         let wait = min(max(timeoutMilliseconds, 100), 5_000)
-        let deadline = Int((Double(count * wait) / 1_000).rounded(.up)) + 1
-        return (
-            ["-n", "-c", String(count), "-W", String(wait), "-t", String(deadline), address.description],
-            TimeInterval(deadline + 1)
-        )
+        let replies = await withTaskGroup(of: ICMPEcho.Reply?.self) { group in
+            for _ in 0..<count {
+                group.addTask { await ICMPEcho.send(to: address, timeoutMilliseconds: wait) }
+            }
+            return await group.reduce(into: [ICMPEcho.Reply]()) { if let reply = $1 { $0.append(reply) } }
+        }
+        return result(replies: replies, sent: count)
     }
 
-    package static func parse(_ output: String) -> PingProbeResult? {
-        let lines = output.split(whereSeparator: \.isNewline).map(String.init)
-        let ttl = lines.compactMap { line -> Int? in
-            guard let range = line.range(of: "ttl=") else { return nil }
-            return Int(line[range.upperBound...].prefix(while: \.isNumber))
-        }.first
-        let loss = lines.compactMap { line -> Double? in
-            guard line.contains("packet loss"), let percent = line.firstIndex(of: "%") else { return nil }
-            let prefix = line[..<percent]
-            let value = prefix.split(whereSeparator: { $0 == " " || $0 == "," }).last
-            return value.flatMap { Double($0) }
-        }.first
-        let average = lines.compactMap { line -> Double? in
-            guard line.contains("min/avg/max"), let equals = line.firstIndex(of: "=") else { return nil }
-            let values = line[line.index(after: equals)...].split(separator: "/")
-            guard values.count >= 2 else { return nil }
-            return Double(values[1].trimmingCharacters(in: .whitespaces))
-        }.first
-        guard ttl != nil || loss != nil || average != nil else { return nil }
-        return PingProbeResult(ttl: ttl, packetLossPercent: loss, averageMilliseconds: average)
+    package static func result(replies: [ICMPEcho.Reply], sent: Int) -> PingProbeResult {
+        PingProbeResult(
+            ttl: replies.first?.ttl,
+            packetLossPercent: Double(sent - replies.count) * 100 / Double(max(sent, 1)),
+            averageMilliseconds: replies.isEmpty
+                ? nil : replies.map(\.milliseconds).reduce(0, +) / Double(replies.count)
+        )
     }
 }
 

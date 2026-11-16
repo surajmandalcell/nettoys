@@ -25,6 +25,8 @@ Docker lab.
   512 KB cap, oldest first, in `latency.json`.
 - Background network check every 30 s, every 60 s on battery. SSH Anchor
   probe every 5 s.
+- Pings never spawn `ping`: one shared unprivileged ICMP datagram socket
+  in process serves every target.
 
 ## Guardrails
 
