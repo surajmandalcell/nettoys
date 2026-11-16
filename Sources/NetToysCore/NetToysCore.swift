@@ -437,7 +437,7 @@ package nonisolated enum SSHConfigFileUpdater {
         newHostName: String
     ) throws -> SSHConfigEdit {
         var result: SSHConfigEdit?
-        try replace(configURL: configURL, backupDirectory: backupDirectory) { original in
+        try replace(configURL: configURL, backupDirectory: backupDirectory, hostAlias: hostAlias) { original in
             let edit = try SSHConfigEditor.replacingHostName(
                 in: original,
                 hostAlias: hostAlias,
@@ -458,7 +458,7 @@ package nonisolated enum SSHConfigFileUpdater {
         targetHostName: String? = nil
     ) throws -> Bool {
         var changed = false
-        try replace(configURL: configURL, backupDirectory: backupDirectory) { original in
+        try replace(configURL: configURL, backupDirectory: backupDirectory, hostAlias: hostAlias) { original in
             let prepared = try SSHConfigEditor.preparingAnchor(
                 in: original,
                 hostAlias: hostAlias,
@@ -471,9 +471,28 @@ package nonisolated enum SSHConfigFileUpdater {
         return changed
     }
 
+    static func replaceContents(configURL: URL, backupDirectory: URL, hostAlias: String?, with data: Data) throws {
+        try replace(configURL: configURL, backupDirectory: backupDirectory, hostAlias: hostAlias) { _ in data }
+    }
+
+    static let temporaryMarker = ".macpowertoys."
+
+    /// A killed write can leave its temporary file beside the config. Remove those on start.
+    @discardableResult
+    package static func removeStaleTemporaryFiles(configURL: URL) -> Int {
+        let target = configURL.resolvingSymlinksInPath()
+        let folder = target.deletingLastPathComponent()
+        let prefix = ".\(target.lastPathComponent)\(temporaryMarker)"
+        let stale = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .filter { $0.hasPrefix(prefix) && $0.hasSuffix(".tmp") }
+        for name in stale { unlink(folder.appendingPathComponent(name).path) }
+        return stale.count
+    }
+
     private static func replace(
         configURL: URL,
         backupDirectory: URL,
+        hostAlias: String?,
         transform: (Data) throws -> Data
     ) throws {
         let fileManager = FileManager.default
@@ -497,12 +516,10 @@ package nonisolated enum SSHConfigFileUpdater {
         let replacement = try transform(original)
         guard replacement != original else { return }
 
-        let backupURL = backupDirectory.appendingPathComponent("\(target.lastPathComponent).\(UUID().uuidString).backup")
-        try original.write(to: backupURL, options: .atomic)
-        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backupURL.path)
+        try NetToysSSHBackups.write(original, hostAlias: hostAlias, in: backupDirectory)
 
         let temporary = target.deletingLastPathComponent()
-            .appendingPathComponent(".\(target.lastPathComponent).macpowertoys.\(UUID().uuidString).tmp")
+            .appendingPathComponent(".\(target.lastPathComponent)\(temporaryMarker)\(UUID().uuidString).tmp")
         let descriptor = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY, before.st_mode & 0o7777)
         guard descriptor >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
         var shouldRemoveTemporary = true
@@ -536,22 +553,13 @@ package nonisolated enum SSHConfigFileUpdater {
         else { throw UpdateError.fileChanged }
         guard rename(temporary.path, target.path) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
         shouldRemoveTemporary = false
-        rotateBackups(in: backupDirectory, keeping: 5)
-    }
-
-    private static func rotateBackups(in directory: URL, keeping limit: Int) {
-        let fileManager = FileManager.default
-        guard let files = try? fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
-        let backups = files.filter { $0.pathExtension == "backup" }.sorted { lhs, rhs in
-            let left = try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            let right = try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            return (left ?? .distantPast) > (right ?? .distantPast)
+        // The rename lives in the folder entry; sync the folder so a power loss keeps the new file.
+        let folder = open(target.deletingLastPathComponent().path, O_RDONLY)
+        if folder >= 0 {
+            fsync(folder)
+            close(folder)
         }
-        for file in backups.dropFirst(limit) { try? fileManager.removeItem(at: file) }
+        NetToysSSHBackups.enforceCap(in: backupDirectory)
     }
 }
 

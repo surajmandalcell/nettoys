@@ -498,8 +498,7 @@ final class NetToysTests: XCTestCase {
         )
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), config.path)
         XCTAssertEqual(
-            try FileManager.default.contentsOfDirectory(at: backup, includingPropertiesForKeys: nil)
-                .filter { $0.pathExtension == "backup" }.count,
+            NetToysSSHBackups.list(in: backup).filter { $0.hostAlias == "jetson" }.count,
             1
         )
     }
@@ -526,8 +525,7 @@ final class NetToysTests: XCTestCase {
             knownHostsAlias: "macpowertoys-anchor-123"
         ))
         XCTAssertEqual(
-            try FileManager.default.contentsOfDirectory(at: backup, includingPropertiesForKeys: nil)
-                .filter { $0.pathExtension == "backup" }.count,
+            NetToysSSHBackups.list(in: backup).filter { $0.hostAlias == "win1" }.count,
             1
         )
         XCTAssertEqual(

@@ -78,8 +78,12 @@ public actor NetToysHelperRuntime {
     private var cachedConfiguration = NetToysConfiguration()
     private static let heartbeatRefresh: TimeInterval = 20
 
-    public init(owner: NetToysHostID) {
+    private let paths: NetToysRuntimePaths
+    private var nextSnapshotCheck = Date.distantPast
+
+    public init(owner: NetToysHostID, paths: NetToysRuntimePaths = .standard) {
         self.owner = owner
+        self.paths = paths
         scanner = NetToysScanner()
     }
 
@@ -99,6 +103,7 @@ public actor NetToysHelperRuntime {
     public func run() async {
         let heartbeat = Task { await heartbeatLoop() }
         defer { heartbeat.cancel() }
+        SSHConfigFileUpdater.removeStaleTemporaryFiles(configURL: paths.sshConfig)
         saveStatus([])
         while !Task.isCancelled {
             let configuration = currentConfiguration()
@@ -125,6 +130,10 @@ public actor NetToysHelperRuntime {
         routeMonitors = routeMonitors.filter { activeAnchorIDs.contains($0.key) }
         nextTailscaleAttempt = nextTailscaleAttempt.filter { activeAnchorIDs.contains($0.key) }
         preparedAnchorPolicies.formIntersection(activeAnchorIDs)
+        if !configuration.anchors.isEmpty, Date() >= nextSnapshotCheck {
+            nextSnapshotCheck = Date().addingTimeInterval(3_600)
+            NetToysSSHBackups.snapshotIfDue(configURL: paths.sshConfig, in: paths.backups)
+        }
 
         var statuses: [SSHAnchorStatus] = []
         for anchor in configuration.anchors {
@@ -391,8 +400,8 @@ public actor NetToysHelperRuntime {
         try await SSHAnchorVerifiedUpdate.apply(
             original: original,
             recovered: recovered,
-            configURL: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config"),
-            backupDirectory: NetToysPaths.backups,
+            configURL: paths.sshConfig,
+            backupDirectory: paths.backups,
             verify: { host, port in
                 await TCPPortProbe.check(host: host, port: port, timeoutMilliseconds: 900).state == .open
             },
@@ -413,7 +422,7 @@ public actor NetToysHelperRuntime {
     }
 
     private func synchronizedAnchor(_ anchor: SSHAnchorConfiguration) -> SSHAnchorConfiguration {
-        let configURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config")
+        let configURL = paths.sshConfig
         guard let data = try? Data(contentsOf: configURL),
               let entry = SSHConfigEditor.entries(in: data).first(where: {
                   $0.aliases.contains { $0.caseInsensitiveCompare(anchor.hostAlias) == .orderedSame }
@@ -432,8 +441,8 @@ public actor NetToysHelperRuntime {
     private func prepareHostKeyPolicy(_ anchor: SSHAnchorConfiguration) throws {
         guard !preparedAnchorPolicies.contains(anchor.id) else { return }
         _ = try SSHConfigFileUpdater.prepareAnchor(
-            configURL: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config"),
-            backupDirectory: NetToysPaths.backups,
+            configURL: paths.sshConfig,
+            backupDirectory: paths.backups,
             hostAlias: anchor.hostAlias,
             knownHostsAlias: anchor.knownHostsAlias
         )
