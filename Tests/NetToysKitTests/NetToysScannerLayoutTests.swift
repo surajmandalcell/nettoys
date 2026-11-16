@@ -202,51 +202,24 @@ final class NetToysScannerLayoutTests: XCTestCase {
         XCTAssertNil(model.scanResultNotice)
     }
 
-    func testDefaultScannerColumnsStayInsideFixedViewport() async throws {
+    func testDeviceInventoryHidesNeverSeenAddresses() throws {
         let suite = "NetToysScannerLayoutTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set("192.0.2.0/24", forKey: "nettoys.scanner.target")
         let model = NetToysScannerViewModel(archive: NetToysScanArchive(), defaults: defaults, host: testHost(defaults))
+        for (address, reachable) in [("192.0.2.1", false), ("192.0.2.2", true)] {
+            model.applyScanUpdate(NetToysScanResult(
+                address: try XCTUnwrap(IPv4Address(address)), isReachable: reachable,
+                responseMilliseconds: nil, hostname: nil, macAddress: nil, vendor: nil, openPorts: []
+            ))
+        }
+        XCTAssertEqual(model.devices(in: .all, from: model.results).map(\.id), ["192.0.2.2"])
         model.applyScanUpdate(NetToysScanResult(
-            address: try XCTUnwrap(IPv4Address("192.0.2.1")), isReachable: false,
+            address: try XCTUnwrap(IPv4Address("192.0.2.2")), isReachable: false,
             responseMilliseconds: nil, hostname: nil, macAddress: nil, vendor: nil, openPorts: []
         ))
-        let canvas = OnePlusWindowCanvas.netToys
-        let workspaceWidth = canvas.size.width - canvas.sidebarWidth
-
-        for scheme in [ColorScheme.dark, .light] {
-            let host = NSHostingView(rootView: NetToysScannerView(model: model)
-                .defaultAppStorage(defaults)
-                .environment(\.colorScheme, scheme)
-                .frame(width: workspaceWidth, height: canvas.size.height))
-            host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-            host.frame = NSRect(x: 0, y: 0, width: workspaceWidth, height: canvas.size.height)
-            host.layoutSubtreeIfNeeded()
-            try await Task.sleep(for: .milliseconds(200))
-            host.layoutSubtreeIfNeeded()
-
-            let table = try XCTUnwrap(findTable(in: host))
-            XCTAssertEqual(table.numberOfRows, 1, "All must retain unreachable hosts for selection and rescan")
-            let viewport = try XCTUnwrap(table.enclosingScrollView).contentView.bounds.width
-            XCTAssertEqual(viewport, 1190, accuracy: 1)
-            let columns = table.tableColumns.indices.filter { !table.tableColumns[$0].isHidden }
-            XCTAssertEqual(columns.map { table.tableColumns[$0].title.uppercased() }, [
-                "IP ADDRESS", "STATUS", "RESPONSE", "HOSTNAME", "MAC ADDRESS", "MAC VENDOR", "OPEN PORTS"
-            ])
-            for index in columns {
-                XCTAssertLessThanOrEqual(table.rect(ofColumn: index).maxX, viewport + 1,
-                                         "\(table.tableColumns[index].title) extends outside the scanner")
-            }
-        }
-    }
-
-    private func findTable(in view: NSView) -> NSTableView? {
-        if let table = view as? NSTableView { return table }
-        for child in view.subviews {
-            if let table = findTable(in: child) { return table }
-        }
-        return nil
+        XCTAssertEqual(model.devices(in: .offline, from: model.results).map(\.id), ["192.0.2.2"],
+                       "A device that answered once stays listed as offline")
     }
 
     private func testHost(_ defaults: UserDefaults) -> NetToysHost {
