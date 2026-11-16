@@ -47,6 +47,9 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
         let recordsHistory: Bool
         let scanArchive: NetToysScanArchive?
         let stamp: [Date?]
+        /// Nil when the action log did not change since the last poll.
+        let actions: ([NetToysActionEntry], UUID?)?
+        let actionStamp: Date?
     }
 
     private static let exportDateFormatter = ISO8601DateFormatter()
@@ -60,6 +63,8 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
     var availability: NetToysAvailabilityPresentation?
     var recordsHistory = true
     var scanArchive = NetToysScanArchive()
+    var actions: [NetToysActionEntry] = []
+    var undoableActionID: UUID?
     var isLoading = true
     var isExporting = false
     var errorMessage: String?
@@ -70,6 +75,7 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
     @ObservationIgnored private let locationManager: CLLocationManager
     @ObservationIgnored private var refreshInProgress = false
     @ObservationIgnored private var historyStamp: [Date?]?
+    @ObservationIgnored private var actionStamp: Date??
 
     init(host: NetToysHost) {
         self.host = host
@@ -107,19 +113,26 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
         defer { refreshInProgress = false }
 
         let previousStamp = force ? nil : historyStamp
+        let previousActionStamp = force ? nil : actionStamp
         let snapshot = await Task.detached(priority: .utility) {
             let stamp = NetToysConfigurationStore.historyStamp()
             let changed = previousStamp != stamp
+            let log = NetToysActionLog.standard
+            let actionStamp = (try? FileManager.default.attributesOfItem(atPath: log.url.path))?[.modificationDate] as? Date
             return Snapshot(
                 history: changed ? NetToysConfigurationStore.history() : nil,
                 helperStatus: NetToysConfigurationStore.status(),
                 recordsHistory: NetToysConfigurationStore.load().recordsNetworkHistory,
                 scanArchive: changed ? NetToysScannerStore.archive() : nil,
-                stamp: stamp
+                stamp: stamp,
+                actions: previousActionStamp == .some(actionStamp) ? nil : (log.entries(), log.lastUndoable()?.id),
+                actionStamp: actionStamp
             )
         }.value
         guard !Task.isCancelled else { return }
         historyStamp = snapshot.stamp
+        actionStamp = .some(snapshot.actionStamp)
+        if let value = snapshot.actions { (actions, undoableActionID) = value }
         if let value = snapshot.history { history = value }
         helperStatus = snapshot.helperStatus
         recordsHistory = snapshot.recordsHistory
@@ -127,6 +140,21 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
         locationAuthorizationStatus = locationManager.authorizationStatus
         isLoading = false
         await rebuildPresentation()
+    }
+
+    func undo(_ entry: NetToysActionEntry) {
+        Task {
+            do { try await NetToysUndoAction.undo(entry) } catch { errorMessage = error.localizedDescription }
+            await refresh()
+        }
+    }
+
+    /// The newest failure while the system shows a warning or safe mode, so Details lands on it.
+    var focusedFailureID: UUID? {
+        switch helperStatus?.system {
+        case .warning, .failed: actions.first { $0.outcome == .failed || $0.kind == .safeMode }?.id
+        default: nil
+        }
     }
 
     func setRange(_ range: NetToysHistoryRange) {
@@ -461,6 +489,10 @@ struct NetToysHistoryView: View {
             }
 
         } content: {
+            // Keyed by the focus, so the failure opens once the log loads after Details.
+            NetToysActionLogList(entries: model.actions, undoableID: model.undoableActionID,
+                                 focus: model.focusedFailureID, undo: model.undo)
+                .id(model.focusedFailureID)
             currentStatus
             availabilityGraph
             recentScans
