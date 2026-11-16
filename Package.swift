@@ -9,7 +9,6 @@ let package = Package(
         .library(name: "NetToysCore", targets: ["NetToysCore"]),
         .library(name: "NetToysKit", targets: ["NetToysKit"]),
         .executable(name: "NetToys", targets: ["NetToysApp"]),
-        .executable(name: "NetToysHelper", targets: ["NetToysHelper"]),
     ],
     dependencies: [
         .package(url: "https://github.com/surajmandalcell/oneplus-ui.git", exact: "1.1.0"),
@@ -19,7 +18,6 @@ let package = Package(
         .target(name: "NetToysKit", dependencies: ["NetToysCore", .product(name: "OnePlusUI", package: "oneplus-ui")],
                 resources: [.copy("Resources/NetToysGlyph.svg")]),
         .executableTarget(name: "NetToysApp", dependencies: ["NetToysCore", "NetToysKit", .product(name: "OnePlusUI", package: "oneplus-ui")]),
-        .executableTarget(name: "NetToysHelper", dependencies: ["NetToysCore"]),
         .target(name: "NetToysLockFixture", path: "Tests/Fixtures/LockProcess"),
         .testTarget(name: "NetToysCoreTests", dependencies: ["NetToysCore", "NetToysLockFixture"]),
         .testTarget(name: "NetToysKitTests", dependencies: ["NetToysCore", "NetToysKit"]),

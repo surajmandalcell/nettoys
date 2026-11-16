@@ -21,6 +21,7 @@ public final class NetToysHost {
         self.scannerDefaults = shared
         if requestsPermissions { try? NetToysPreferences.migrate(legacy: defaults, shared: shared, host: id) }
         loginItems = NetToysLoginItemManager(host: id)
+        if requestsPermissions { loginItems.startMonitoring() }
         localNetworkAccess = NetToysLocalNetworkAccess(requestsPermissions: requestsPermissions)
     }
 }

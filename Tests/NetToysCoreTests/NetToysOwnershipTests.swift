@@ -123,7 +123,6 @@ final class NetToysOwnershipTests: XCTestCase {
         XCTAssertFalse(NetToysHelperIdentity.isCompatible(status, now: now, verifyOwner: signed))
         XCTAssertFalse(NetToysHelperIdentity.isCompatible(NetToysHelperStatus(version: 1, heartbeat: now, anchors: []),
                                                          now: now, verifyOwner: signed))
-        XCTAssertFalse(NetToysHelperIdentity.isLockAwareHost(at: URL(fileURLWithPath: "/nonexistent/old-host.app")))
     }
 
     func testMigrationImportsOnlyNineAbsentScannerKeysOnce() throws {
@@ -160,30 +159,6 @@ final class NetToysOwnershipTests: XCTestCase {
         XCTAssertEqual(added, ["192.0.2.1", "192.0.2.2"])
         let removed = try NetToysScannerStore.saveFavoriteTargets([], since: ["192.0.2.1"], to: favorites)
         XCTAssertEqual(removed, ["192.0.2.2"])
-    }
-
-    func testHandoffRequiresMatchingLiveSignedParentsAndExpires() throws {
-        let directory = try directory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appendingPathComponent("handoff.json")
-        let request = NetToysHandoff(requester: .standalone, owner: .macPowerToys)
-        let signed: (String, Int32) -> Bool = { _, pid in pid > 0 }
-        XCTAssertTrue(request.isValidRequest(for: .macPowerToys, verifyParent: signed))
-        XCTAssertFalse(request.isValidRequest(for: .standalone, verifyParent: signed))
-        XCTAssertFalse(request.isValidRequest(for: .macPowerToys, verifyParent: { _, _ in false }))
-        XCTAssertFalse(request.isValidRequest(for: .macPowerToys, now: request.expires, verifyParent: signed))
-        XCTAssertFalse(request.isValidRequest(for: .macPowerToys, now: request.expires.addingTimeInterval(-60),
-                                             verifyParent: signed))
-        try request.save(to: url)
-        XCTAssertEqual(NetToysHandoff.load(from: url), request)
-        var response = request
-        response.releasedByPID = 123
-        XCTAssertTrue(response.isValidResponse(to: request, verifyParent: signed))
-        XCTAssertFalse(response.isValidResponse(to: request, verifyParent: { _, _ in false }))
-        XCTAssertFalse(response.isValidResponse(to: request, now: request.expires, verifyParent: signed))
-        XCTAssertFalse(response.isValidResponse(to: .init(requester: .standalone, owner: .macPowerToys),
-                                               verifyParent: signed))
-        XCTAssertFalse(response.isValidRequest(for: .macPowerToys, verifyParent: signed))
     }
 
     func testStandaloneRoutesKeepTheHostBoundsAndSchemeSeparate() throws {

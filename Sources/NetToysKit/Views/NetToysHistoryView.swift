@@ -759,11 +759,7 @@ public struct NetToysSettingsView: View {
             }
             .environment(\.onePlusCardPadding, 0)
             if let error = host.loginItems.errorMessage {
-                OnePlusBanner(error, tone: .warning) {
-                    Button("Take Over Helper") {
-                        Task { if await host.loginItems.takeOwnership() { enabled = true } }
-                    }
-                }
+                OnePlusBanner(error, tone: .warning)
             }
             OnePlusCard {
                 OnePlusCardHeader("Permissions")

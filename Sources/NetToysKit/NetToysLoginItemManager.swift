@@ -1,159 +1,89 @@
-import AppKit
 import NetToysCore
 import Observation
 import ServiceManagement
 
+/// Runs SSH Anchor, Wi-Fi Priority, and Network History inside the app and opens the app at login.
+/// Quitting the app stops monitoring.
 @Observable
 @MainActor
 public final class NetToysLoginItemManager {
     private let host: NetToysHostID
-    private let service: SMAppService
     public private(set) var errorMessage: String?
-    @ObservationIgnored private var handoffObserver: NSObjectProtocol?
-    private static let handoffNotification = Notification.Name("netToysReleaseOwner")
+    @ObservationIgnored private var monitor: Task<Void, Never>?
+    @ObservationIgnored private var monitorGeneration = 0
 
     public init(host: NetToysHostID) {
         self.host = host
-        service = .loginItem(identifier: host.helperIdentifier)
-        handoffObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Self.handoffNotification, object: host.rawValue, queue: .main
-        ) { [weak self] _ in Task { @MainActor [weak self] in await self?.releaseForHandoff() } }
-    }
-
-    isolated deinit {
-        if let handoffObserver { DistributedNotificationCenter.default().removeObserver(handoffObserver) }
-    }
-
-    public var status: SMAppService.Status { service.status }
-
-    public nonisolated static func hasFreshHeartbeat(_ status: NetToysHelperStatus?, now: Date = Date(),
-                                                     expectedSourceCommit: String? = nil) -> Bool {
-        NetToysHelperIdentity.hasFreshHeartbeat(status, now: now, expectedSourceCommit: expectedSourceCommit)
     }
 
     public func setEnabled(_ enabled: Bool) async -> Bool {
         errorMessage = nil
+        let host = host
         do {
-            let requests = try await setBackgroundRequest(enabled).backgroundRequests
-            if !enabled {
-                let owner = NetToysConfigurationStore.status()?.ownerBundleID
-                if owner != host.rawValue || requests.isEmpty { try await unregister() }
-                return true
-            }
-            if await enable() { return true }
-            try await setBackgroundRequest(false)
+            // The store transaction waits on a cross-process file lock, so it never runs on the main thread.
+            _ = try await Task.detached(priority: .userInitiated) {
+                try NetToysConfigurationStore.setBackgroundRequest(enabled, for: host)
+            }.value
         } catch {
             errorMessage = error.localizedDescription
-            if !enabled { _ = try? await setBackgroundRequest(true) }
+            return false
         }
-        return false
-    }
-
-    /// Off the main thread: true when this host requested background work or its helper is registered.
-    public nonisolated func hasBackgroundWork() async -> Bool {
-        let host = host
-        return await Task.detached(priority: .utility) {
-            let status = SMAppService.loginItem(identifier: host.helperIdentifier).status
-            return NetToysConfigurationStore.load().backgroundRequests.contains(host)
-                || (status != .notRegistered && status != .notFound)
-        }.value
-    }
-
-    /// The store transaction waits on a cross-process file lock, so it never runs on the main thread.
-    @discardableResult
-    private func setBackgroundRequest(_ enabled: Bool) async throws -> NetToysConfiguration {
-        let host = host
-        return try await Task.detached(priority: .userInitiated) {
-            try NetToysConfigurationStore.setBackgroundRequest(enabled, for: host)
-        }.value
-    }
-
-    /// Explicit user action. The signed parent must be running; no parent is launched.
-    public func takeOwnership() async -> Bool {
-        guard let status = NetToysConfigurationStore.status(),
-              let owner = status.ownerBundleID.flatMap(NetToysHostID.init(rawValue:)), owner != host else {
-            return await setEnabled(true)
-        }
-        let request = NetToysHandoff(requester: host, owner: owner)
+        if enabled { startMonitoring() } else { await stopMonitoring() }
+        let app = SMAppService.mainApp
         do {
-            try request.save()
-            DistributedNotificationCenter.default().postNotificationName(Self.handoffNotification,
-                object: owner.rawValue, userInfo: nil, deliverImmediately: true)
-            while Date() < request.expires, !Task.isCancelled {
-                if let response = NetToysHandoff.load(), response.isValidResponse(to: request),
-                   !NetToysProcessLock.isHeld() { return await setEnabled(true) }
-                try await Task.sleep(for: .milliseconds(250))
+            if enabled, app.status != .enabled { try app.register() }
+            if !enabled, app.status != .notRegistered, app.status != .notFound { try await app.unregister() }
+            if enabled, app.status == .requiresApproval {
+                errorMessage = "Allow Sam's NetToys in System Settings > General > Login Items to start it at login."
             }
-            errorMessage = "Open the other Sam's NetToys host and disable its helper, then try again."
-        } catch { errorMessage = error.localizedDescription }
-        return false
+        } catch {
+            errorMessage = "Sam's NetToys could not change its login item: \(error.localizedDescription)"
+        }
+        return true
     }
 
-    private func releaseForHandoff() async {
-        guard var request = NetToysHandoff.load(), request.isValidRequest(for: host)
-        else { return }
-        do {
-            try await unregister()
-            request.releasedByPID = ProcessInfo.processInfo.processIdentifier
-            try request.save()
-        } catch { errorMessage = error.localizedDescription }
-    }
-
-    private var embeddedRevision: String? {
-        let name = host == .macPowerToys ? "MacPowerToysNetHelper" : "NetToysHelper"
-        let bundle = Bundle(url: Bundle.main.bundleURL.appendingPathComponent("Contents/Library/LoginItems/\(name).app"))
-        return (bundle?.object(forInfoDictionaryKey: "NetToysSourceCommit")
-            ?? bundle?.object(forInfoDictionaryKey: "MPTSourceCommit")) as? String
-    }
-
-    private func enable() async -> Bool {
-        let status = NetToysConfigurationStore.status()
-        if NetToysHelperIdentity.isCompatible(status) {
-            if status?.ownerBundleID != host.rawValue { try? await unregister(); return true }
-            if Self.hasFreshHeartbeat(status, expectedSourceCommit: embeddedRevision) { return true }
-        }
-        if host == .standalone, !legacyHostIsLockAware() {
-            errorMessage = "Update MacPowerToys to the extracted Sam's NetToys build before enabling this helper. Disable its old helper first."
-            return false
-        }
-        if NetToysProcessLock.isHeld(), status?.ownerBundleID != host.rawValue {
-            errorMessage = "Another Sam's NetToys helper owns monitoring. Use Take Over Helper while its parent app is open."
-            return false
-        }
-        do {
-            try await unregister()
-            try service.register()
-            if service.status == .requiresApproval {
-                errorMessage = "Allow Sam's NetToys Helper in System Settings to enable monitoring."
-                SMAppService.openSystemSettingsLoginItems()
-            } else if service.status == .enabled {
-                for _ in 0..<32 {
-                    let current = NetToysConfigurationStore.status()
-                    if NetToysHelperIdentity.isCompatible(current) {
-                        if current?.ownerBundleID != host.rawValue { try? await unregister() }
-                        return true
-                    }
-                    try await Task.sleep(for: .milliseconds(250))
+    /// Runs while monitoring is on. The process lock keeps a second monitor, such as an older
+    /// MacPowerToys helper, from writing the same SSH config at the same time.
+    public func startMonitoring() {
+        guard monitor == nil else { return }
+        monitorGeneration += 1
+        let generation = monitorGeneration
+        let host = host
+        monitor = Task { [weak self] in
+            await Self.removeLegacyServices()
+            let runtime = NetToysHelperRuntime(owner: host)
+            var location: NetToysHelperLocationAccess?
+            while !Task.isCancelled {
+                let (requested, lock) = await Task.detached(priority: .utility) {
+                    NetToysConfigurationStore.load().backgroundRequests.contains(host)
+                        ? (true, try? NetToysProcessLock()) : (false, nil)
+                }.value
+                guard requested else { break }
+                guard let lock else { try? await Task.sleep(for: .seconds(30)); continue }
+                if location == nil {
+                    location = NetToysHelperLocationAccess { state in Task { await runtime.setSSIDAccess(state) } }
+                    location?.start()
                 }
-                errorMessage = "Sam's NetToys Helper did not start. Check Background App Activity."
-            } else { errorMessage = "macOS did not enable Sam's NetToys Helper." }
-            try await unregister()
-        } catch { errorMessage = error.localizedDescription; try? await unregister() }
-        return false
+                await runtime.run()
+                withExtendedLifetime(lock) {}
+            }
+            if self?.monitorGeneration == generation { self?.monitor = nil }
+        }
     }
 
-    private func legacyHostIsLockAware() -> Bool {
-        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: NetToysHostID.macPowerToys.helperIdentifier)
-        let status = NetToysConfigurationStore.status()
-        // An old writer can pause longer than the heartbeat window.
-        if let status, status.version < NetToysBuild.statusSchemaVersion { return false }
-        if !applications.isEmpty, !NetToysHelperIdentity.isCompatible(status) { return false }
-        let url = URL(fileURLWithPath: "/Applications/MacPowerToys.app")
-        guard FileManager.default.fileExists(atPath: url.path) else { return applications.isEmpty }
-        return NetToysHelperIdentity.isLockAwareHost(at: url)
+    private func stopMonitoring() async {
+        let running = monitor
+        monitor = nil
+        running?.cancel()
+        await running?.value
     }
 
-    private func unregister() async throws {
-        if service.status != .notRegistered, service.status != .notFound { try await service.unregister() }
+    /// Builds up to 1.0.10 registered a separate login helper and a root neighbor daemon.
+    private nonisolated static func removeLegacyServices() async {
+        for service in [SMAppService.loginItem(identifier: "com.surajmandal.nettoys.helper"),
+                        .daemon(plistName: "com.surajmandal.nettoys.neighbor.plist")]
+        where service.status != .notRegistered {
+            try? await service.unregister()
+        }
     }
 }

@@ -93,8 +93,9 @@ public nonisolated enum NetToysHelperIdentity {
         return verifyOwner(owner, pid)
     }
 
+    /// The standalone app runs monitoring itself; MacPowerToys 1.0.13 still runs it in its helper.
     public static func isSignedOwner(_ owner: NetToysHostID, _ pid: Int32) -> Bool {
-        isSignedProcess(identifier: owner.helperIdentifier, pid: pid)
+        isSignedProcess(identifier: owner == .standalone ? owner.rawValue : owner.helperIdentifier, pid: pid)
     }
 
     package static func isSignedProcess(identifier: String, pid: Int32) -> Bool {
@@ -106,64 +107,5 @@ public nonisolated enum NetToysHelperIdentity {
         guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess,
               let requirement else { return false }
         return SecCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess
-    }
-
-    public static func isLockAwareHost(at url: URL) -> Bool {
-        guard let bundle = Bundle(url: url),
-              bundle.object(forInfoDictionaryKey: "NetToysPackageVersion") as? String == NetToysBuild.packageVersion
-        else { return false }
-        var code: SecStaticCode?
-        var requirement: SecRequirement?
-        let text = "identifier \"\(NetToysHostID.macPowerToys.rawValue)\" and anchor apple generic and certificate leaf[subject.OU] = \"GF57JXJF5A\""
-        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
-              SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement
-        else { return false }
-        return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckNestedCode),
-                                          requirement) == errSecSuccess
-    }
-}
-
-package nonisolated struct NetToysHandoff: Codable, Equatable, Sendable {
-    package let nonce: UUID
-    package let requester: NetToysHostID
-    package let requesterPID: Int32
-    package let owner: NetToysHostID
-    package let expires: Date
-    package var releasedByPID: Int32?
-    package static var url: URL { NetToysPaths.directory.appendingPathComponent("handoff.json") }
-
-    package init(requester: NetToysHostID, owner: NetToysHostID) {
-        nonce = UUID()
-        self.requester = requester
-        requesterPID = getpid()
-        self.owner = owner
-        expires = Date().addingTimeInterval(8)
-    }
-
-    package func isValidRequest(for host: NetToysHostID, now: Date = Date(),
-                                verifyParent: (String, Int32) -> Bool = NetToysHelperIdentity.isSignedProcess) -> Bool {
-        owner == host && requester != host && requesterPID > 0 && releasedByPID == nil
-            && (0...8).contains(expires.timeIntervalSince(now)) && expires > now
-            && verifyParent(requester.rawValue, requesterPID)
-    }
-
-    package func isValidResponse(to request: Self, now: Date = Date(),
-                                 verifyParent: (String, Int32) -> Bool = NetToysHelperIdentity.isSignedProcess) -> Bool {
-        guard nonce == request.nonce, requester == request.requester, requesterPID == request.requesterPID,
-              owner == request.owner, expires == request.expires, expires > now,
-              let pid = releasedByPID, pid > 0 else { return false }
-        return verifyParent(owner.rawValue, pid)
-    }
-
-    package func save(to url: URL = Self.url) throws {
-        try NetToysStoreTransaction.withLock(at: url.deletingLastPathComponent()) {
-            try JSONEncoder().encode(self).write(to: url, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        }
-    }
-
-    package static func load(from url: URL = Self.url) -> Self? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(Self.self, from: data)
     }
 }
