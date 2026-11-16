@@ -96,12 +96,13 @@ public struct NetToysTraySnapshot: Sendable {
     }
 }
 
-/// The System row state. The safety work in NetToysCore will supply it.
-enum NetToysSystemState: Equatable {
-    case running
-    case warning(Int)
-    case paused
-    case failed(String)
+extension NetToysTraySnapshot {
+    /// The saved pause and safe mode win over the runtime's last status, so Pause and Resume show at once.
+    var system: NetToysSystemHealth {
+        if let reason = configuration.safeModeReason { return .failed(reason: reason) }
+        if configuration.actionsPaused { return .paused }
+        return helperStatus?.system ?? .running
+    }
 }
 
 /// The menu bar panel: loads the snapshot while open and runs the panel actions.
@@ -110,8 +111,6 @@ public struct NetToysMenuContent: View {
     private let openPage: (NetToysPage) -> Void
     @State private var speedTest: NetToysSpeedTest
     @State private var visible = false
-    // stub: binds the System row to the window's pause switch until NetToysCore reports the system state.
-    @AppStorage("nettoys.pauseAll") private var pausedAll = false
 
     public init(snapshot: Binding<NetToysTraySnapshot>, host: NetToysHost, openPage: @escaping (NetToysPage) -> Void) {
         _snapshot = snapshot
@@ -120,8 +119,13 @@ public struct NetToysMenuContent: View {
     }
 
     public var body: some View {
-        NetToysMenuPanel(snapshot: snapshot, speedTest: speedTest, system: pausedAll ? .paused : .running,
-                         visible: visible, openPage: openPage, toggleSystem: { pausedAll.toggle() })
+        NetToysMenuPanel(snapshot: snapshot, speedTest: speedTest, system: snapshot.system,
+                         visible: visible, openPage: openPage, toggleSystem: {
+                             // The row toggles only from Running (Pause) or Paused (Resume).
+                             if let saved = try? NetToysConfigurationStore.setActionsPaused(snapshot.system != .paused) {
+                                 snapshot.configuration = saved
+                             }
+                         })
             .background(NetToysKeyWindowReader { visible = $0 })
             .task(id: visible) {
                 while visible, !Task.isCancelled {
@@ -149,7 +153,7 @@ private enum Panel {
 struct NetToysMenuPanel: View {
     let snapshot: NetToysTraySnapshot
     let speedTest: NetToysSpeedTest
-    let system: NetToysSystemState
+    let system: NetToysSystemHealth
     var visible = true
     let openPage: (NetToysPage) -> Void
     let toggleSystem: () -> Void
