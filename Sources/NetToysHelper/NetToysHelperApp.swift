@@ -9,7 +9,6 @@ struct NetToysHelperApp {
             do { try NetToysBuild.verifyBundledResources(); print("NetToys resources verified"); return }
             catch { FileHandle.standardError.write(Data("NetToys resources are missing\n".utf8)); exit(1) }
         }
-        if geteuid() == 0 { NetToysNeighborDaemon.run() }
         let runtime = NetToysHelperRuntime(owner: .standalone)
         var location: NetToysHelperLocationAccess?
         // launchd relaunches a login item that exits, so wait idle until work or the lock appears.

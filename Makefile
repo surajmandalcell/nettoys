@@ -12,7 +12,7 @@ build:
 	$(SWIFT) build --scratch-path "$(BUILD_PATH)" --configuration release --product NetToys --jobs 2
 	$(SWIFT) build --scratch-path "$(BUILD_PATH)" --configuration release --product NetToysHelper --jobs 2
 	rm -rf "$(APP)"
-	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources" "$(HELPER)/Contents/MacOS" "$(HELPER)/Contents/Resources" "$(APP)/Contents/Library/LaunchDaemons"
+	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources" "$(HELPER)/Contents/MacOS" "$(HELPER)/Contents/Resources"
 	@set -e; BIN="$$(swift build --scratch-path "$(BUILD_PATH)" --configuration release --show-bin-path)"; \
 	cp "$$BIN/NetToys" "$(APP)/Contents/MacOS/NetToys"; \
 	cp "$$BIN/NetToysHelper" "$(HELPER)/Contents/MacOS/NetToysHelper"; \
@@ -25,7 +25,6 @@ build:
 	done
 	cp packaging/macos/Info.plist "$(APP)/Contents/Info.plist"
 	cp packaging/macos/Helper-Info.plist "$(HELPER)/Contents/Info.plist"
-	cp packaging/macos/com.surajmandal.nettoys.neighbor.plist "$(APP)/Contents/Library/LaunchDaemons/"
 	cp LICENSE Sources/NetToysCore/Resources/IEEE-MAC-VENDORS-NOTICE.txt "$(APP)/Contents/Resources/"
 	@set -e; mkdir -p "$(BUILD_PATH)/NetToys.iconset"; \
 	for size in 16 32 128 256 512; do \
@@ -46,7 +45,7 @@ build:
 	$(MAKE) verify
 
 verify:
-	plutil -lint "$(APP)/Contents/Info.plist" "$(HELPER)/Contents/Info.plist" "$(APP)/Contents/Library/LaunchDaemons/com.surajmandal.nettoys.neighbor.plist"
+	plutil -lint "$(APP)/Contents/Info.plist" "$(HELPER)/Contents/Info.plist"
 	codesign --verify --deep --strict "$(HELPER)"
 	codesign --verify --deep --strict "$(APP)"
 	@test "$$(plutil -extract NetToysSourceCommit raw "$(APP)/Contents/Info.plist")" = "$(SOURCE_COMMIT)"

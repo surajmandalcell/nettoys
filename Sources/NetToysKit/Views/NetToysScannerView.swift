@@ -141,6 +141,8 @@ final class NetToysScannerViewModel {
     var annotations: [String: NetToysHostAnnotation] = [:]
     var openers = NetToysOpener.defaults
     var selection = Set<String>()
+    /// The last time each address answered, from the saved scan runs and the live scan.
+    private(set) var lastSeen: [String: Date] = [:]
     var sortOrder = [KeyPathComparator(\NetToysScanResult.sortAddress)] {
         didSet {
             defaults.set(try? JSONEncoder().encode(sortOrder.compactMap(Self.savedSort)), forKey: Self.sortKey)
@@ -165,7 +167,7 @@ final class NetToysScannerViewModel {
         host: NetToysHost
     ) {
         self.host = host
-        scanner = NetToysScanner(neighborContract: .init(host: host.id))
+        scanner = NetToysScanner()
         let defaults = defaults ?? host.scannerDefaults
         self.defaults = defaults
         isLoading = archive == nil
@@ -220,9 +222,21 @@ final class NetToysScannerViewModel {
             let restored = saved.map(Self.comparator)
             if !restored.isEmpty { sortOrder = restored }
         }
+        if let archive { recordLastSeen(archive) }
         replaceResults(results)
         completed = results.count
         total = results.count
+    }
+
+    private func recordLastSeen(_ archive: NetToysScanArchive) {
+        for run in archive.runs {
+            for result in run.results where result.isReachable { lastSeen[result.id] = run.date }
+        }
+    }
+
+    /// A device is an address that answered once or that the owner marked. Never-seen range addresses stay out.
+    func isKnownDevice(_ result: NetToysScanResult) -> Bool {
+        result.isReachable || lastSeen[result.id] != nil || annotations[result.id] != nil
     }
 
     func applyPrefill(_ prefill: NetToysScanPrefill?) {
@@ -241,6 +255,7 @@ final class NetToysScannerViewModel {
         savedAnnotations = annotations
         favoriteTargets = favorites
         savedFavoriteTargets = favorites
+        recordLastSeen(archive)
         if let run = archive.runs.last {
             if defaults.string(forKey: Self.targetKey) == nil {
                 isApplyingActiveNetwork = true
@@ -420,7 +435,6 @@ final class NetToysScannerViewModel {
 
     func start(targets override: [IPv4Address]? = nil) {
         guard !isLoading, !isScanning, !isImporting else { return }
-        _ = host.neighborService.enable()
         do {
             var defaultPorts = try PortList.parse(portInput)
             if customTextEnabled {
@@ -718,6 +732,7 @@ final class NetToysScannerViewModel {
 
     func applyScanUpdate(_ update: NetToysScanResult) {
         var update = update
+        if update.isReachable { lastSeen[update.id] = Date() }
         if let comment = annotations[update.id]?.comment, !comment.isEmpty {
             update.comment = comment
         }
@@ -763,12 +778,6 @@ struct NetToysScannerView: View {
     @State private var showStatistics = false
     @State private var detailResult: NetToysScanResult?
     @State private var openerPreview: NetToysOpenerPreview?
-    @State private var neighborService: NetToysNeighborServiceManager
-
-    private var macAccessEnabled: Bool {
-        _ = neighborService.revision
-        return neighborService.isEnabled
-    }
 
     private var selectedRows: [NetToysScanResult] {
         model.results.filter { model.selection.contains($0.id) }
@@ -777,7 +786,6 @@ struct NetToysScannerView: View {
     init(model: NetToysScannerViewModel, openSettings: @escaping () -> Void = {}) {
         self.model = model
         self.openSettings = openSettings
-        _neighborService = State(initialValue: model.host.neighborService)
         _columnCustomization = AppStorage(wrappedValue: TableColumnCustomization(), "nettoys.scanner.table-columns",
                                           store: model.host.defaults)
     }
@@ -785,7 +793,6 @@ struct NetToysScannerView: View {
     var body: some View {
         OnePlusPage(scrolls: false) {
             OnePlusPageHeader(title: "IP Scanner", subtitle: networkSubtitle) {
-                OnePlusStatus("MAC access: \(macAccessTitle)", state: neighborService.status == nil ? .neutral : macAccessEnabled ? .online : .warning)
                 Button(action: openSettings) {
                     Label("Scanner Settings", systemImage: "slider.horizontal.3")
                 }
@@ -794,13 +801,6 @@ struct NetToysScannerView: View {
         } content: {
             scanControls
                 .disabled(model.isLoading)
-            if neighborService.status != nil, !macAccessEnabled {
-                OnePlusBanner(neighborService.errorMessage ?? "Allow MAC access to identify neighboring devices.", tone: .warning) {
-                    Button(neighborService.status == .requiresApproval ? "Open Login Items" : "Enable MAC Access") {
-                        neighborService.enable()
-                    }
-                }
-            }
             resultControls
             OnePlusCard {
                 resultsTable.frame(maxHeight: .infinity)
@@ -830,7 +830,6 @@ struct NetToysScannerView: View {
             model.start()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            neighborService.refresh()
             Task { await refreshNetworkContext() }
         }
         .task {
@@ -1249,17 +1248,6 @@ struct NetToysScannerView: View {
         .onePlusText(.caption)
         .padding(.horizontal, OnePlusMetrics.cardPadding)
         .frame(height: OnePlusMetrics.cardHeader)
-    }
-
-    private var macAccessTitle: String {
-        _ = neighborService.revision
-        return switch neighborService.status {
-        case nil: "Checking"
-        case .enabled: "Allowed"
-        case .requiresApproval: "Needs Approval"
-        case .notRegistered: "Not Enabled"
-        default: "Unavailable"
-        }
     }
 
     private func refreshNetworkContext() async {

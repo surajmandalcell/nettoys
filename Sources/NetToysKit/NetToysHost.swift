@@ -9,7 +9,6 @@ public final class NetToysHost {
     public let defaults: UserDefaults
     public let scannerDefaults: UserDefaults
     public let loginItems: NetToysLoginItemManager
-    public let neighborService: NetToysNeighborServiceManager
     let localNetworkAccess: NetToysLocalNetworkAccess
 
     public init(id: NetToysHostID, requestsPermissions: Bool = true,
@@ -22,7 +21,6 @@ public final class NetToysHost {
         self.scannerDefaults = shared
         if requestsPermissions { try? NetToysPreferences.migrate(legacy: defaults, shared: shared, host: id) }
         loginItems = NetToysLoginItemManager(host: id)
-        neighborService = NetToysNeighborServiceManager(host: id, refreshOnInit: requestsPermissions)
         localNetworkAccess = NetToysLocalNetworkAccess(requestsPermissions: requestsPermissions)
     }
 }

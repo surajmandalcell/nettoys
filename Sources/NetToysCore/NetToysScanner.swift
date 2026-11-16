@@ -1040,11 +1040,7 @@ package nonisolated enum NetToysScannerStore {
 }
 
 package actor NetToysScanner {
-    private let neighborContract: NetToysNeighborServiceContract?
-
-    package init(neighborContract: NetToysNeighborServiceContract? = nil) {
-        self.neighborContract = neighborContract
-    }
+    package init() {}
 
     package func scan(
         targets: [IPv4Address],
@@ -1139,15 +1135,13 @@ package actor NetToysScanner {
             }
             scanned.append(contentsOf: results)
         }
-        let interfaceIndex = activeNetwork.map { if_nametoindex($0.interfaceName) } ?? 0
         // A local host that answered ARP is alive even when every probed port is closed.
         let neighborCandidates = scanned.filter {
             $0.isReachable || activeNetwork?.contains($0.address.description) == true
         }.map(\.address)
         let arp = Task.isCancelled ? [:] : await ARPTable.load(
             addresses: neighborCandidates,
-            interfaceIndex: interfaceIndex,
-            contract: neighborContract
+            interfaceName: activeNetwork?.interfaceName
         )
         var macAddresses = arp
         if let activeNetwork, macAddresses[activeNetwork.address.description] == nil,
@@ -1538,38 +1532,46 @@ nonisolated enum HostResolver {
 }
 
 public nonisolated enum ARPTable {
-    static func load(
-        addresses: [IPv4Address],
-        interfaceIndex: UInt32,
-        contract: NetToysNeighborServiceContract? = nil
-    ) async -> [String: String] {
-        await Task.detached(priority: .utility) {
-            var result = loadSynchronously(addresses: addresses, interfaceIndex: interfaceIndex)
-            guard result.count < Set(addresses).count else { return result }
-            result.merge(loadNeighborCache(addresses: addresses, interfaceIndex: interfaceIndex)) {
-                current, _ in current
-            }
-            let missing = addresses.filter { result[$0.description] == nil }
-            if !missing.isEmpty, let contract {
-                result.merge(await NetToysNeighborXPCClient.load(
-                    addresses: missing,
-                    interfaceIndex: interfaceIndex,
-                    contract: contract
-                )) { current, _ in current }
-            }
-            return result
+    /// macOS 27 hides the neighbor table from the routing sysctl, but `arp -an` still lists it to the user.
+    static func load(addresses: [IPv4Address], interfaceName: String?) async -> [String: String] {
+        guard !addresses.isEmpty else { return [:] }
+        return await Task.detached(priority: .utility) {
+            let requested = Set(addresses.map(\.description))
+            return parse(arpOutput(), interfaceName: interfaceName).filter { requested.contains($0.key) }
         }.value
     }
 
-    static func loadNeighborCache(
-        addresses: [IPv4Address],
-        interfaceIndex: UInt32
-    ) -> [String: String] {
-        guard interfaceIndex > 0, interfaceIndex <= UInt16.max else { return [:] }
-        guard let data = neighborCacheData() else { return [:] }
-        let requested = Set(addresses.map(\.description))
-        return parseRoutingMessages(data, interfaceIndex: interfaceIndex)
-            .filter { requested.contains($0.key) }
+    private static func arpOutput() -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
+        process.arguments = ["-an"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Parses lines such as `? (192.168.1.5) at 3c:22:fb:1:2:3 on en0 ifscope [ethernet]`.
+    static func parse(_ output: String, interfaceName: String?) -> [String: String] {
+        var result: [String: String] = [:]
+        for line in output.split(whereSeparator: \.isNewline) {
+            let words = line.split(separator: " ")
+            guard words.count >= 6, words[2] == "at", words[4] == "on",
+                  interfaceName.map({ words[5] == $0 }) ?? true,
+                  words[1].hasPrefix("("), words[1].hasSuffix(")"),
+                  let address = IPv4Address(String(words[1].dropFirst().dropLast()))
+            else { continue }
+            let octets = words[3].split(separator: ":", omittingEmptySubsequences: false)
+                .compactMap { $0.count <= 2 ? UInt8($0, radix: 16) : nil }
+            // Skip incomplete, broadcast, and the 02:00:00:00:00:00 placeholder macOS uses for hidden addresses.
+            guard octets.count == 6, octets != [2, 0, 0, 0, 0, 0], octets != Array(repeating: 0xff, count: 6),
+                  octets.contains(where: { $0 != 0 }) else { continue }
+            result[address.description] = octets.map { String(format: "%02x", $0) }.joined(separator: ":")
+        }
+        return result
     }
 
     static func interfaceMAC(named name: String) -> String? {
@@ -1593,174 +1595,6 @@ public nonisolated enum ARPTable {
             return octets.map { String(format: "%02x", $0) }.joined(separator: ":")
         }
         return nil
-    }
-
-    public static func neighborCacheData() -> Data? {
-        var mib = [CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_LLINFO]
-        var size = 0
-        guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0, size > 0 else { return nil }
-        var data = Data(count: size)
-        let status = data.withUnsafeMutableBytes {
-            sysctl(&mib, u_int(mib.count), $0.baseAddress, &size, nil, 0)
-        }
-        guard status == 0 else { return nil }
-        if size < data.count { data.removeSubrange(size..<data.count) }
-        return data
-    }
-
-    static func queryMessage(
-        for address: IPv4Address,
-        interfaceIndex: UInt32,
-        sequence: Int32,
-        processID: pid_t
-    ) -> Data {
-        var header = rt_msghdr()
-        header.rtm_msglen = UInt16(MemoryLayout<rt_msghdr>.size + MemoryLayout<sockaddr_in>.size)
-        header.rtm_version = UInt8(RTM_VERSION)
-        header.rtm_type = UInt8(RTM_GET)
-        header.rtm_index = UInt16(interfaceIndex)
-        header.rtm_flags = RTF_IFSCOPE
-        header.rtm_addrs = RTA_DST
-        header.rtm_pid = processID
-        header.rtm_seq = sequence
-        var destination = sockaddr_in()
-        destination.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        destination.sin_family = sa_family_t(AF_INET)
-        destination.sin_addr.s_addr = address.rawValue.bigEndian
-        var message = withUnsafeBytes(of: &header) { Data($0) }
-        message.append(withUnsafeBytes(of: &destination) { Data($0) })
-        return message
-    }
-
-    private static func loadSynchronously(
-        addresses: [IPv4Address],
-        interfaceIndex: UInt32
-    ) -> [String: String] {
-        guard interfaceIndex > 0, interfaceIndex <= UInt16.max else { return [:] }
-        let descriptor = socket(PF_ROUTE, SOCK_RAW, 0)
-        guard descriptor >= 0 else { return [:] }
-        defer { Darwin.close(descriptor) }
-        var timeout = timeval(tv_sec: 0, tv_usec: 250_000)
-        _ = setsockopt(
-            descriptor,
-            SOL_SOCKET,
-            SO_RCVTIMEO,
-            &timeout,
-            socklen_t(MemoryLayout<timeval>.size)
-        )
-        let processID = getpid()
-        var result: [String: String] = [:]
-        for (offset, address) in Array(Set(addresses)).sorted().enumerated() {
-            let sequence = Int32(truncatingIfNeeded: offset + 1)
-            let query = queryMessage(
-                for: address,
-                interfaceIndex: interfaceIndex,
-                sequence: sequence,
-                processID: processID
-            )
-            let sent = query.withUnsafeBytes {
-                Darwin.write(descriptor, $0.baseAddress, $0.count)
-            }
-            guard sent == query.count else { continue }
-            for _ in 0..<8 {
-                var reply = Data(count: 2_048)
-                let byteCount = reply.withUnsafeMutableBytes {
-                    Darwin.read(descriptor, $0.baseAddress, $0.count)
-                }
-                guard byteCount >= MemoryLayout<rt_msghdr>.size else { break }
-                let header = reply.withUnsafeBytes {
-                    $0.loadUnaligned(as: rt_msghdr.self)
-                }
-                guard header.rtm_pid == processID, header.rtm_seq == sequence else { continue }
-                guard header.rtm_errno == 0 else { break }
-                if let macAddress = neighborMAC(
-                    in: reply.prefix(byteCount),
-                    expectedAddress: address,
-                    interfaceIndex: interfaceIndex
-                ) {
-                    result[address.description] = macAddress
-                }
-                break
-            }
-        }
-        return result
-    }
-
-    static func neighborMAC(
-        in data: Data,
-        expectedAddress: IPv4Address,
-        interfaceIndex: UInt32
-    ) -> String? {
-        guard data.count >= MemoryLayout<rt_msghdr>.size else { return nil }
-        let header = data.withUnsafeBytes { $0.loadUnaligned(as: rt_msghdr.self) }
-        guard header.rtm_index == UInt16(interfaceIndex),
-              header.rtm_flags & RTF_LLINFO != 0,
-              header.rtm_flags & RTF_GATEWAY == 0
-        else { return nil }
-        return parseRoutingMessages(data, interfaceIndex: interfaceIndex)[expectedAddress.description]
-    }
-
-    static func parseRoutingMessages(
-        _ data: Data,
-        interfaceIndex: UInt32? = nil
-    ) -> [String: String] {
-        data.withUnsafeBytes { bytes in
-            var result: [String: String] = [:]
-            var messageOffset = 0
-            let headerSize = MemoryLayout<rt_msghdr>.size
-            while messageOffset + headerSize <= bytes.count {
-                let header = bytes.loadUnaligned(
-                    fromByteOffset: messageOffset,
-                    as: rt_msghdr.self
-                )
-                let messageLength = Int(header.rtm_msglen)
-                guard messageLength >= headerSize,
-                      messageOffset + messageLength <= bytes.count
-                else { break }
-                var addressOffset = messageOffset + headerSize
-                var ipAddress: String?
-                var macAddress: String?
-                // Like arp(8), take the interface from the link-layer address. This Mac's own
-                // entry is routed through lo0, so its rtm_index is not the Wi-Fi interface.
-                var linkIndex = UInt16(header.rtm_index)
-                for index in 0..<Int(RTAX_MAX) where header.rtm_addrs & (1 << index) != 0 {
-                    guard addressOffset + 2 <= messageOffset + messageLength else { break }
-                    let addressLength = Int(bytes[addressOffset])
-                    let family = Int32(bytes[addressOffset + 1])
-                    let alignedLength = addressLength > 0
-                        ? (addressLength + MemoryLayout<UInt32>.size - 1)
-                            & ~(MemoryLayout<UInt32>.size - 1)
-                        : MemoryLayout<UInt32>.size
-                    guard addressOffset + alignedLength <= messageOffset + messageLength else { break }
-                    if index == Int(RTAX_DST), family == AF_INET, addressLength >= 8 {
-                        ipAddress = (4..<8)
-                            .map { String(bytes[addressOffset + $0]) }
-                            .joined(separator: ".")
-                    } else if index == Int(RTAX_GATEWAY), family == AF_LINK, addressLength >= 8 {
-                        let sdlIndex = UInt16(bytes[addressOffset + 2]) | UInt16(bytes[addressOffset + 3]) << 8
-                        if sdlIndex != 0 { linkIndex = sdlIndex }
-                        let nameLength = Int(bytes[addressOffset + 5])
-                        let macLength = Int(bytes[addressOffset + 6])
-                        let macOffset = addressOffset + 8 + nameLength
-                        if macLength == 6, macOffset + macLength <= addressOffset + addressLength {
-                            let octets = (0..<macLength).map { bytes[macOffset + $0] }
-                            if octets != [2, 0, 0, 0, 0, 0], octets.contains(where: { $0 != 0 }) {
-                                macAddress = octets
-                                    .map { String(format: "%02x", $0) }
-                                    .joined(separator: ":")
-                            }
-                        }
-                    }
-                    addressOffset += alignedLength
-                }
-                if let ipAddress, let macAddress,
-                   interfaceIndex.map({ UInt16($0) == linkIndex }) ?? true {
-                    result[ipAddress] = macAddress
-                }
-                messageOffset += messageLength
-            }
-            return result
-        }
     }
 }
 

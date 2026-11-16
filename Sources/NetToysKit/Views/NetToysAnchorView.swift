@@ -67,7 +67,7 @@ final class NetToysAnchorViewModel {
 
     init(host: NetToysHost) {
         self.host = host
-        scanner = NetToysScanner(neighborContract: .init(host: host.id))
+        scanner = NetToysScanner()
     }
 
     var selectedEntry: SSHConfigEntry? {

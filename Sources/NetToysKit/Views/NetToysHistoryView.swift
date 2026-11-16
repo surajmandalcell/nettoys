@@ -734,7 +734,6 @@ public struct NetToysSettingsView: View {
     private let isTransitioning: Bool
     @State private var model: NetToysHistoryViewModel
     @State private var localNetworkAccess: NetToysLocalNetworkAccess
-    @State private var neighborService: NetToysNeighborServiceManager
     @State private var confirmClear = false
 
     public init(host: NetToysHost, enabled: Binding<Bool>, isTransitioning: Bool = false) {
@@ -743,7 +742,6 @@ public struct NetToysSettingsView: View {
         self.isTransitioning = isTransitioning
         _model = State(initialValue: NetToysHistoryViewModel(host: host))
         _localNetworkAccess = State(initialValue: host.localNetworkAccess)
-        _neighborService = State(initialValue: host.neighborService)
     }
 
     public var body: some View {
@@ -785,7 +783,7 @@ public struct NetToysSettingsView: View {
                     }
                 }
                 OnePlusSettingRow("Local network", help: localNetworkStatusMessage,
-                                  controlWidth: OnePlusMetrics.wideControlColumn) {
+                                  controlWidth: OnePlusMetrics.wideControlColumn, separator: false) {
                     HStack(spacing: OnePlusMetrics.actionSpacing) {
                         OnePlusStatus(localNetworkStatusTitle, state: localNetworkAccess.state == .allowed ? .online : .offline)
                             .fixedSize()
@@ -797,21 +795,6 @@ public struct NetToysSettingsView: View {
                         } else if localNetworkAccess.state == .unavailable {
                             Button("Try Again") { localNetworkAccess.request() }
                                 .fixedSize()
-                        }
-                    }
-                }
-                OnePlusSettingRow("MAC addresses", help: macAccessStatusMessage,
-                                  controlWidth: OnePlusMetrics.wideControlColumn, separator: false) {
-                    HStack(spacing: OnePlusMetrics.actionSpacing) {
-                        OnePlusStatus(macAccessStatusTitle, state: neighborService.status == nil ? .neutral : neighborService.isEnabled ? .online : .offline)
-                            .fixedSize()
-                        if neighborService.status != nil, !neighborService.isEnabled {
-                            Button(neighborService.status == .requiresApproval ? "Settings" : "Enable") {
-                                neighborService.enable()
-                            }
-                            .fixedSize()
-                            .help(macAccessActionTitle)
-                            .accessibilityLabel(macAccessActionTitle)
                         }
                     }
                 }
@@ -827,12 +810,10 @@ public struct NetToysSettingsView: View {
         .task {
             await model.refresh()
             localNetworkAccess.request()
-            neighborService.refresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.refresh() }
             localNetworkAccess.request()
-            neighborService.refresh()
         }
         .confirmationDialog("Clear network history?", isPresented: $confirmClear) {
             Button("Clear History", role: .destructive) { model.clear() }
@@ -854,40 +835,6 @@ public struct NetToysSettingsView: View {
         case .denied: "Needs Attention"
         case .unavailable: "Unavailable"
         }
-    }
-
-    private var macAccessStatusTitle: String {
-        _ = neighborService.revision
-        return switch neighborService.status {
-        case nil: "Checking"
-        case .enabled: "Allowed"
-        case .requiresApproval: "Needs Approval"
-        case .notRegistered: "Not Enabled"
-        case .notFound: "Unavailable"
-        @unknown default: "Unavailable"
-        }
-    }
-
-    private var macAccessStatusMessage: String {
-        switch neighborService.status {
-        case nil:
-            "Checking MAC address access."
-        case .enabled:
-            "The approved helper supplies neighboring MAC addresses automatically during scans."
-        case .requiresApproval:
-            "Turn on every \(host.displayName) entry under System Settings > General > "
-                + "Login Items & Extensions > Background App Activity, then return and scan again."
-        case .notRegistered:
-            "Enable the narrow privileged helper that reads the system neighbor cache."
-        case .notFound:
-            neighborService.errorMessage ?? "The installed app does not contain its MAC address helper."
-        @unknown default:
-            neighborService.errorMessage ?? "macOS could not determine the helper state."
-        }
-    }
-
-    private var macAccessActionTitle: String {
-        neighborService.status == .requiresApproval ? "Open Login Items" : "Enable MAC Access"
     }
 
     private var localNetworkStatusMessage: String {

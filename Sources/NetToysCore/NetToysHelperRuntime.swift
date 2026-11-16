@@ -80,7 +80,7 @@ public actor NetToysHelperRuntime {
 
     public init(owner: NetToysHostID) {
         self.owner = owner
-        scanner = NetToysScanner(neighborContract: .init(host: owner))
+        scanner = NetToysScanner()
     }
 
     nonisolated static func localSwitchCandidate(

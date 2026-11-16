@@ -660,85 +660,26 @@ final class NetToysTests: XCTestCase {
         XCTAssertTrue(targets.allSatisfy { $0.ports == [2222] })
     }
 
-    func testARPTableParsesNativeNeighborMessages() {
-        let headerSize = MemoryLayout<rt_msghdr>.size
-        let destination: [UInt8] = [16, UInt8(AF_INET), 0, 0, 192, 168, 1, 18]
-            + Array(repeating: 0, count: 8)
-        let link: [UInt8] = [20, UInt8(AF_LINK), 0, 0, 0, 3, 6, 0]
-            + Array("en0".utf8)
-            + [0xf8, 0x3d, 0xc6, 0x56, 0xfe, 0xe3]
-            + Array(repeating: 0, count: 3)
-        var header = rt_msghdr()
-        header.rtm_msglen = UInt16(headerSize + destination.count + link.count)
-        header.rtm_addrs = RTA_DST | RTA_GATEWAY
-        header.rtm_flags = RTF_LLINFO
-        header.rtm_index = 14
-        var message = withUnsafeBytes(of: &header) { Data($0) }
-        message.append(contentsOf: destination)
-        message.append(contentsOf: link)
-
-        XCTAssertEqual(
-            ARPTable.neighborMAC(
-                in: message,
-                expectedAddress: IPv4Address(rawValue: 0xC0A8_0112),
-                interfaceIndex: 14
-            ),
-            "f8:3d:c6:56:fe:e3"
-        )
-        XCTAssertEqual(
-            ARPTable.parseRoutingMessages(message, interfaceIndex: 14),
-            ["192.168.1.18": "f8:3d:c6:56:fe:e3"]
-        )
-        XCTAssertTrue(ARPTable.parseRoutingMessages(message, interfaceIndex: 15).isEmpty)
-        // This Mac's own entry routes through lo0 (index 1) but its link address names en0 (14).
-        var ownHeader = header
-        ownHeader.rtm_index = 1
-        var ownLink = link
-        ownLink[2] = 14
-        var ownMessage = withUnsafeBytes(of: &ownHeader) { Data($0) }
-        ownMessage.append(contentsOf: destination)
-        ownMessage.append(contentsOf: ownLink)
-        XCTAssertEqual(ARPTable.parseRoutingMessages(ownMessage, interfaceIndex: 14),
-                       ["192.168.1.18": "f8:3d:c6:56:fe:e3"])
-        XCTAssertTrue(ARPTable.parseRoutingMessages(ownMessage, interfaceIndex: 1).isEmpty)
-        var routedHeader = header
-        routedHeader.rtm_flags = RTF_GATEWAY
-        var routedMessage = withUnsafeBytes(of: &routedHeader) { Data($0) }
-        routedMessage.append(contentsOf: destination)
-        routedMessage.append(contentsOf: link)
-        XCTAssertNil(ARPTable.neighborMAC(
-            in: routedMessage,
-            expectedAddress: IPv4Address(rawValue: 0xC0A8_0112),
-            interfaceIndex: 14
-        ))
-        let privacyPlaceholder = link.enumerated().map { offset, byte in
-            (11...16).contains(offset) ? [0x02, 0, 0, 0, 0, 0][offset - 11] : byte
-        }
-        var redactedMessage = withUnsafeBytes(of: &header) { Data($0) }
-        redactedMessage.append(contentsOf: destination)
-        redactedMessage.append(contentsOf: privacyPlaceholder)
-        XCTAssertNil(ARPTable.neighborMAC(
-            in: redactedMessage,
-            expectedAddress: IPv4Address(rawValue: 0xC0A8_0112),
-            interfaceIndex: 14
-        ))
-
-        let query = ARPTable.queryMessage(
-            for: IPv4Address(rawValue: 0xC0A8_0112),
-            interfaceIndex: 14,
-            sequence: 7,
-            processID: 42
-        )
-        let queryHeader = query.withUnsafeBytes {
-            $0.loadUnaligned(as: rt_msghdr.self)
-        }
-        XCTAssertEqual(queryHeader.rtm_type, UInt8(RTM_GET))
-        XCTAssertEqual(queryHeader.rtm_addrs, RTA_DST)
-        XCTAssertEqual(queryHeader.rtm_index, 14)
-        XCTAssertNotEqual(queryHeader.rtm_flags & RTF_IFSCOPE, 0)
-        XCTAssertEqual(queryHeader.rtm_seq, 7)
-        XCTAssertEqual(queryHeader.rtm_pid, 42)
-        XCTAssertEqual(Array(query.suffix(16).prefix(8)), [16, UInt8(AF_INET), 0, 0, 192, 168, 1, 18])
+    func testARPTableParsesArpOutput() {
+        let output = """
+        ? (192.168.1.1) at a0:b1:c2:d3:e4:f5 on en0 ifscope [ethernet]
+        ? (192.168.1.5) at (incomplete) on en0 ifscope [ethernet]
+        ? (192.168.1.18) at 4a:89:cf:8:f:9d on en0 ifscope [ethernet]
+        ? (192.168.1.20) at 2:0:0:0:0:0 on en0 ifscope [ethernet]
+        ? (192.168.1.255) at ff:ff:ff:ff:ff:ff on en0 ifscope [ethernet]
+        ? (224.0.0.251) at 1:0:5e:0:0:fb on en0 ifscope permanent [ethernet]
+        ? (10.0.0.7) at 3c:22:fb:12:34:56 on en7 ifscope [ethernet]
+        ? (10.0.0.8) at 3c:22:fb:12:34:5 on en7 expires in 1185 seconds [ethernet]
+        not an arp line
+        """
+        XCTAssertEqual(ARPTable.parse(output, interfaceName: "en0"), [
+            "192.168.1.1": "a0:b1:c2:d3:e4:f5",
+            "192.168.1.18": "4a:89:cf:08:0f:9d",
+            "224.0.0.251": "01:00:5e:00:00:fb",
+        ])
+        XCTAssertEqual(ARPTable.parse(output, interfaceName: "en7"),
+                       ["10.0.0.7": "3c:22:fb:12:34:56", "10.0.0.8": "3c:22:fb:12:34:05"])
+        XCTAssertEqual(ARPTable.parse(output, interfaceName: nil).count, 5)
     }
 
     func testMACVendorDatabaseUsesLongestPublicPrefixAndRejectsLocalAddresses() {
@@ -1059,19 +1000,6 @@ final class NetToysTests: XCTestCase {
         XCTAssertEqual(MACVendorDatabase.bundled.vendor(for: "c4:c1:7d:b2:1f:c0"), "Apple, Inc.")
         XCTAssertNil(ARPTable.interfaceMAC(named: "no-such-interface0"))
         if let mac = ARPTable.interfaceMAC(named: "lo0") { XCTFail("loopback has no MAC: \(mac)") }
-    }
-
-    func testIdleDaemonExitsOnlyAfterItsLastConnectionCloses() throws {
-        let exits = ScanUpdateRecorder()
-        let marker = NetToysScanResult(address: IPv4Address(rawValue: 1), isReachable: true, responseMilliseconds: nil,
-                                       hostname: nil, macAddress: nil, vendor: nil, openPorts: [])
-        let idle = NetToysDaemonIdleExit(delay: 0.2) { exits.append(marker) }
-        idle.connectionStarted()
-        Thread.sleep(forTimeInterval: 0.5)
-        XCTAssertTrue(exits.values.isEmpty, "An open connection keeps the daemon alive")
-        idle.connectionEnded()
-        Thread.sleep(forTimeInterval: 0.5)
-        XCTAssertEqual(exits.values.count, 1)
     }
 
     func testSSHConfigEntriesExposeLiteralHostAddressAndPort() throws {
