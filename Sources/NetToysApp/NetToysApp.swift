@@ -6,6 +6,7 @@ import SwiftUI
 
 @main
 struct NetToysApp: App {
+    @NSApplicationDelegateAdaptor private var delegate: NetToysAppDelegate
     @State private var host = NetToysHost(id: .standalone)
     @State private var page = NetToysPage.scanner
     @State private var prefill: NetToysScanPrefill?
@@ -40,28 +41,30 @@ struct NetToysApp: App {
                 prefill = route.prefill
                 if let prefill { NotificationCenter.default.post(name: .netToysPrefill, object: prefill) }
             }
-            .task { if enabled { enabled = await host.loginItems.setEnabled(true) } }
         }
-        .defaultSize(OnePlusWindowCanvas.netToys.size)
+        .defaultSize(width: 1280, height: 820)
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+        // The window opens only on a user launch; a login launch stays in the menu bar.
+        .defaultLaunchBehavior(.suppressed)
 
         MenuBarExtra {
-            OnePlusMenuPanel {
-                Text("Sam's NetToys")
-            } actions: {
-                Button("Open Sam's NetToys") { openMainWindow() }
-            } content: {
-                NetToysMenuContent(snapshot: $menuSnapshot, host: host) { destination in
-                    page = destination
-                    openMainWindow()
-                }
+            NetToysMenuContent(snapshot: $menuSnapshot, host: host) { destination in
+                page = destination
+                openMainWindow()
             }
         } label: {
             Group {
                 if let glyph = NetToysGlyph.menuBarImage { Image(nsImage: glyph) } else { Image(systemName: "network") }
             }
             .accessibilityLabel("Sam's NetToys")
+            // The label exists from launch, so monitoring starts here even when no window opens.
+            .task {
+                guard delegate.reopen == nil else { return } // first appearance only
+                delegate.reopen = openMainWindow
+                if !delegate.launchedAtLogin { openMainWindow() }
+                if enabled { enabled = await host.loginItems.setEnabled(true) }
+            }
         }
         .menuBarExtraStyle(.window)
     }
@@ -70,6 +73,25 @@ struct NetToysApp: App {
     private func openMainWindow() {
         openWindow(id: "nettoys")
         NSApp.activate()
+    }
+}
+
+@MainActor
+final class NetToysAppDelegate: NSObject, NSApplicationDelegate {
+    private(set) var launchedAtLogin = false
+    var reopen: (() -> Void)?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // SMAppService.mainApp launches carry the "launched as login item" property in the open event.
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        launchedAtLogin = event?.eventID == kAEOpenApplication
+            && event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+
+    /// A Dock click or a second launch opens the window when none is visible.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { reopen?() }
+        return true
     }
 }
 

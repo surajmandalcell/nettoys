@@ -1,33 +1,47 @@
-import OnePlusUI
+import AppKit
 import NetToysCore
 import SwiftUI
 
+/// What the menu bar panel shows. Loaded from the stores and a few quick probes.
 public struct NetToysTraySnapshot: Sendable {
     var configuration = NetToysConfiguration()
     var helperStatus: NetToysHelperStatus?
-    var recentAnchors: [SSHAnchorConfiguration] = []
-    var recentIssues: [NetworkTransitionEvent] = []
     var route: DefaultRoute?
     var localNetwork: LocalIPv4Network?
     var ssid: String?
-    var isWiFi = false
     var gatewayMilliseconds: Double?
+    /// Gateway pings taken while the panel was open, oldest first. Nil is a lost ping.
+    var latencySamples: [Double?] = []
+    /// When the current online (or offline) stretch began, from Network History.
+    var stateSince: Date?
+    var outagesToday = 0
+    var outageSecondsToday: TimeInterval = 0
+    var deviceCount: Int?
+    var offlineDeviceCount = 0
     var isLoaded = false
 
     public init() {}
 
-    nonisolated static func load() async -> Self {
+    var isOnline: Bool { helperStatus?.network?.internet != .unreachable && route != nil }
+
+    nonisolated static func load(keeping previous: Self) async -> Self {
         var result = await Task.detached(priority: .utility) {
-            let configuration = NetToysConfigurationStore.load()
-            let status = NetToysConfigurationStore.status()
             var snapshot = Self()
-            snapshot.configuration = configuration
-            snapshot.helperStatus = status
-            snapshot.recentAnchors = NetToysMenuLayout.recentAnchors(configuration.anchors, statuses: status?.anchors ?? [])
-            snapshot.recentIssues = NetToysMenuLayout.recentNetworkIssues(NetToysConfigurationStore.history().events)
+            snapshot.configuration = NetToysConfigurationStore.load()
+            snapshot.helperStatus = NetToysConfigurationStore.status()
+            let events = NetToysConfigurationStore.history().events
+            snapshot.applyHistory(events, now: Date())
+            let runs = NetToysScannerStore.archive().runs
+            if let latest = runs.last {
+                let seen = Set(runs.flatMap { $0.results.filter(\.isReachable).map(\.id) })
+                let up = Set(latest.results.filter(\.isReachable).map(\.id))
+                snapshot.deviceCount = seen.count
+                snapshot.offlineDeviceCount = seen.subtracting(up).count
+            }
             snapshot.isLoaded = true
             return snapshot
         }.value
+        result.latencySamples = previous.latencySamples
         guard !Task.isCancelled else { return result }
         let routeData = try? await TailscalePeerCatalog.runStatusCommand(
             executableURL: URL(fileURLWithPath: "/sbin/route"), arguments: ["-n", "get", "default"],
@@ -38,12 +52,10 @@ public struct NetToysTraySnapshot: Sendable {
         if let route = result.route {
             let local = await Task.detached(priority: .utility) {
                 (LocalIPv4Network.active(preferredInterfaceName: route.interfaceName),
-                 NetworkSSID.current(interfaceName: route.interfaceName),
-                 NetworkSSID.isWiFi(interfaceName: route.interfaceName))
+                 NetworkSSID.current(interfaceName: route.interfaceName))
             }.value
             result.localNetwork = local.0?.interfaceName == route.interfaceName ? local.0 : nil
             result.ssid = local.1
-            result.isWiFi = local.2
             guard !Task.isCancelled else { return result }
             let ping = try? await TailscalePeerCatalog.runStatusCommand(
                 executableURL: URL(fileURLWithPath: "/sbin/ping"), arguments: ["-n", "-c", "1", "-W", "1000", route.gateway],
@@ -52,308 +64,467 @@ public struct NetToysTraySnapshot: Sendable {
             )
             result.gatewayMilliseconds = ping.flatMap { PingProbe.parse(String(decoding: $0, as: UTF8.self))?.averageMilliseconds }
         }
+        result.latencySamples = Array((result.latencySamples + [result.gatewayMilliseconds]).suffix(60))
         return result
+    }
+
+    /// Finds when the current state began and counts today's internet outages.
+    nonisolated mutating func applyHistory(_ events: [NetworkTransitionEvent], now: Date) {
+        let start = Calendar.current.startOfDay(for: now)
+        var outageStart: Date?
+        outagesToday = 0
+        outageSecondsToday = 0
+        stateSince = nil
+        for event in events.sorted(by: { $0.date < $1.date }) {
+            for change in event.changes {
+                guard case .internet(_, let to) = change else {
+                    if case .network = change { stateSince = event.date }
+                    continue
+                }
+                stateSince = event.date
+                guard event.date >= start else { continue }
+                if to == .unreachable, outageStart == nil {
+                    outageStart = event.date
+                    outagesToday += 1
+                } else if to == .reachable, let began = outageStart {
+                    outageSecondsToday += event.date.timeIntervalSince(began)
+                    outageStart = nil
+                }
+            }
+        }
+        if let outageStart { outageSecondsToday += now.timeIntervalSince(outageStart) }
     }
 }
 
+/// The System row state. The safety work in NetToysCore will supply it.
+enum NetToysSystemState: Equatable {
+    case running
+    case warning(Int)
+    case paused
+    case failed(String)
+}
+
+/// The menu bar panel: loads the snapshot while open and runs the panel actions.
 public struct NetToysMenuContent: View {
     @Binding private var snapshot: NetToysTraySnapshot
     private let openPage: (NetToysPage) -> Void
-    @Environment(\.onePlusIsVisible) private var isVisible
-    @State private var loading = false
-    @State private var refreshRequest = UUID()
-
-    private var configuration: NetToysConfiguration {
-        get { snapshot.configuration }
-        nonmutating set { snapshot.configuration = newValue }
-    }
-    @State private var errorMessage: String?
-    @AppStorage("tray.nettoys.anchor.expanded") private var anchorExpanded = false
-    @AppStorage("tray.nettoys.wifi.expanded") private var wifiExpanded = false
-    @AppStorage("tray.nettoys.history.expanded") private var historyExpanded = false
+    @State private var speedTest: NetToysSpeedTest
+    @State private var visible = false
+    // stub: binds the System row to the window's pause switch until NetToysCore reports the system state.
+    @AppStorage("nettoys.pauseAll") private var pausedAll = false
 
     public init(snapshot: Binding<NetToysTraySnapshot>, host: NetToysHost, openPage: @escaping (NetToysPage) -> Void) {
         _snapshot = snapshot
         self.openPage = openPage
-        _anchorExpanded = AppStorage(wrappedValue: false, "tray.nettoys.anchor.expanded", store: host.defaults)
-        _wifiExpanded = AppStorage(wrappedValue: false, "tray.nettoys.wifi.expanded", store: host.defaults)
-        _historyExpanded = AppStorage(wrappedValue: false, "tray.nettoys.history.expanded", store: host.defaults)
+        _speedTest = State(initialValue: NetToysSpeedTest(defaults: host.defaults))
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(spacing: OnePlusMenuMetrics.tileGap) {
-                networkSummary
-                OnePlusMenuSectionHeader("Network controls", actionTitle: "Refresh", compactAction: true) {
-                    refreshRequest = UUID()
-                }
-                .disabled(loading)
-                activitySection(
-                    title: "SSH Anchor",
-                    detail: configuration.anchors.isEmpty
-                        ? "No configured anchors"
-                        : "\(configuration.monitoredAnchors.count) of \(configuration.anchors.count) active",
-                    symbol: "link",
-                    isOn: Binding(
-                        get: { configuration.sshAnchorEnabled },
-                        set: { enabled in save { $0.sshAnchorEnabled = enabled } }
-                    ),
-                    disabled: configuration.anchors.isEmpty,
-                    isExpanded: $anchorExpanded
-                ) {
-                    if snapshot.recentAnchors.isEmpty {
-                        emptyActivity("No anchors to show")
-                    } else {
-                        ForEach(snapshot.recentAnchors) { anchor in
-                            anchorRow(anchor)
-                        }
-                    }
-                    openPageButton("Open all anchors", page: .anchor)
-                }
-                activitySection(
-                    title: "Wi-Fi Priority",
-                    detail: "\(configuration.wifiPriority.ssids.count) saved networks",
-                    symbol: "wifi",
-                    isOn: Binding(
-                        get: { configuration.wifiPriority.isEnabled },
-                        set: { enabled in
-                            save { $0.wifiPriority.isEnabled = enabled && $0.wifiPriority.ssids.count >= 2 }
-                        }
-                    ),
-                    disabled: configuration.wifiPriority.ssids.count < 2,
-                    isExpanded: $wifiExpanded
-                ) {
-                    if configuration.wifiPriority.ssids.isEmpty {
-                        emptyActivity("No priority networks")
-                    } else {
-                        ForEach(Array(configuration.wifiPriority.ssids.prefix(5)), id: \.self) { ssid in
-                            activityRow(
-                                symbol: snapshot.helperStatus?.network?.ssid == ssid ? "wifi" : "line.3.horizontal",
-                                title: ssid,
-                                detail: snapshot.helperStatus?.network?.ssid == ssid ? "Connected" : "Priority \((configuration.wifiPriority.ssids.firstIndex(of: ssid) ?? 0) + 1)"
-                            )
-                        }
-                    }
-                    openPageButton("Open Wi-Fi Priority", page: .wifiPriority)
-                }
-                activitySection(
-                    title: "Network History",
-                    detail: configuration.recordsNetworkHistory ? "Recording changes" : "Not recording",
-                    symbol: "chart.xyaxis.line",
-                    isOn: Binding(
-                        get: { configuration.recordsNetworkHistory },
-                        set: { enabled in save { $0.recordsNetworkHistory = enabled } }
-                    ),
-                    isExpanded: $historyExpanded
-                ) {
-                    if snapshot.recentIssues.isEmpty {
-                        emptyActivity("No recent network issues")
-                    } else {
-                        ForEach(snapshot.recentIssues, id: \.date) { event in
-                            activityRow(
-                                symbol: "exclamationmark.circle",
-                                title: event.displayName,
-                                detail: event.changes.map(NetToysHistoryViewModel.description).joined(separator: " · ")
-                            )
-                        }
-                    }
-                    openPageButton("Open Network History", page: .history)
+        NetToysMenuPanel(snapshot: snapshot, speedTest: speedTest, system: pausedAll ? .paused : .running,
+                         visible: visible, openPage: openPage, toggleSystem: { pausedAll.toggle() })
+            .background(NetToysKeyWindowReader { visible = $0 })
+            .task(id: visible) {
+                while visible, !Task.isCancelled {
+                    snapshot = await NetToysTraySnapshot.load(keeping: snapshot)
+                    try? await Task.sleep(for: .seconds(5))
                 }
             }
-            .disabled(!snapshot.isLoaded)
-            if let errorMessage {
-                Text(errorMessage)
-                    .onePlusText(.caption, color: OnePlusColor.danger)
-                    .padding(.top, OnePlusMenuMetrics.tileGap)
-            }
-        }
-        .task(id: isVisible ? refreshRequest : nil) {
-            guard isVisible else { loading = false; return }
-            await refresh()
-        }
     }
+}
 
-    private var helperDetail: String {
-        guard let status = snapshot.helperStatus else { return "Background helper is not reporting" }
-        return "Updated \(status.heartbeat.formatted(date: .omitted, time: .shortened))"
-    }
+// MARK: - Panel
 
-    private var networkSummary: some View {
-        let identity = NetworkIdentity(networkID: snapshot.route?.networkID ?? "disconnected", ssid: snapshot.ssid)
-        let networkName = snapshot.isLoaded
-            ? (snapshot.route == nil ? "Unavailable" : identity.displayName)
-            : "Loading…"
-        return VStack(spacing: OnePlusMenuMetrics.tileGap) {
-            OnePlusMenuControlRow("Current network", systemImage: "network") {
-                HStack(spacing: OnePlusMenuMetrics.tileGap) {
-                    Text(networkName).onePlusText(.row, color: OnePlusColor.dataBlue).lineLimit(1).help(networkName)
-                        .frame(maxWidth: OnePlusMenuMetrics.columnWidth(), alignment: .trailing)
-                    Image(systemName: "info.circle").onePlusText(.caption).help(helperDetail)
-                        .accessibilityLabel(helperDetail)
-                }
-            }
-            if snapshot.isWiFi && identity.ssid == nil {
-                HStack {
-                    Text("Name unavailable").onePlusText(.caption)
-                    Spacer(minLength: OnePlusMenuMetrics.tileGap)
-                    Button("Location access") { open(.settings) }
-                        .buttonStyle(OnePlusButtonStyle(.link, size: .small, horizontalPadding: 0))
-                        .accessibilityLabel("Manage Wi-Fi Location access in Sam's NetToys")
-                        .help("Open Sam's NetToys Location status and recovery actions")
-                }
-            }
-            networkRow(identity.ssid == nil ? "Connection" : "Interface", symbol: snapshot.isWiFi ? "wifi" : "network",
-                       value: identity.ssid == nil ? (snapshot.route == nil ? "—" : snapshot.isWiFi ? "Wi-Fi" : "Active route") : snapshot.route?.interfaceName ?? "—",
-                       detail: reachability)
-            networkRow("Local IP", symbol: "network", value: snapshot.localNetwork?.address.description ?? "—", detail: "IPv4")
-            networkRow("Gateway", symbol: "point.3.connected.trianglepath.dotted", value: snapshot.gatewayMilliseconds.map {
-                $0.formatted(.number.precision(.fractionLength(1))) + " ms"
-            } ?? (snapshot.route == nil ? "—" : "No reply"), detail: snapshot.route?.gateway ?? "—")
-            HStack(spacing: OnePlusMenuMetrics.tileGap) {
-                Button("Scan network", systemImage: "magnifyingglass") {
-                    open(.scanner)
-                }
-                Button("Copy IP", systemImage: "doc.on.doc") {
-                    if let address = snapshot.localNetwork?.address.description {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(address, forType: .string)
-                    }
-                }
-                .disabled(snapshot.localNetwork == nil)
-                Spacer(minLength: 0)
-            }
-            .buttonStyle(OnePlusButtonStyle(.neutral, size: .small))
-        }
-    }
+private enum Panel {
+    static let edge: CGFloat = 20
+    static let card = Color(light: .init(white: 1, alpha: 0.6), dark: .init(white: 1, alpha: 0.07))
+    static let fill = Color(light: NSColor(srgbRed: 0.957, green: 0.957, blue: 0.965, alpha: 0.74),
+                            dark: NSColor(srgbRed: 0.11, green: 0.11, blue: 0.118, alpha: 0.66))
+    static let well = Color(light: .init(white: 0, alpha: 0.07), dark: .init(white: 1, alpha: 0.13))
+    static let hover = Color(light: .init(white: 0, alpha: 0.06), dark: .init(white: 1, alpha: 0.09))
+    static let separator = Color(light: .init(white: 0, alpha: 0.1), dark: .init(white: 1, alpha: 0.1))
+    static let red = Color(light: NSColor(srgbRed: 0.79, green: 0.28, blue: 0.25, alpha: 1),
+                           dark: NSColor(srgbRed: 1, green: 0.54, blue: 0.5, alpha: 1))
+}
 
-    private func networkRow(_ title: String, symbol: String, value: String, detail: String) -> some View {
-        OnePlusMenuControlRow(title, systemImage: symbol) {
-            HStack(spacing: OnePlusMenuMetrics.tileGap) {
-                Text(value).onePlusText(.row, color: OnePlusColor.dataBlue).lineLimit(1).help(value)
-                Text(detail).onePlusText(.caption).lineLimit(1).help(detail)
-            }
-        }
-    }
+struct NetToysMenuPanel: View {
+    let snapshot: NetToysTraySnapshot
+    let speedTest: NetToysSpeedTest
+    let system: NetToysSystemState
+    var visible = true
+    let openPage: (NetToysPage) -> Void
+    let toggleSystem: () -> Void
+    var now = Date()
+    @State private var copied = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var reachability: String {
-        guard snapshot.helperStatus?.network?.networkID == snapshot.route?.networkID else { return "Unknown" }
-        return switch snapshot.helperStatus?.network?.internet {
-        case .reachable: "Online"
-        case .unreachable: "Offline"
-        default: "Unknown"
-        }
-    }
-
-    private func refresh() async {
-        loading = true
-        defer { if !Task.isCancelled { loading = false } }
-        let savedConfiguration = configuration
-        var result = await NetToysTraySnapshot.load()
-        guard !Task.isCancelled else { return }
-        if configuration != savedConfiguration { result.configuration = configuration }
-        snapshot = result
-    }
-
-    private func activitySection<Content: View>(
-        title: String,
-        detail: String,
-        symbol: String,
-        isOn: Binding<Bool>,
-        disabled: Bool = false,
-        isExpanded: Binding<Bool>,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
+    var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Button { isExpanded.wrappedValue.toggle() } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: symbol)
-                            .onePlusText(.row, color: OnePlusColor.secondary)
-                            .frame(width: OnePlusMetrics.compactControlHeight)
-                        Text(title).onePlusText(.row)
-                        Spacer(minLength: 4)
-                        Text(detail).onePlusText(.caption).lineLimit(1).help(detail)
-                        Image(systemName: "chevron.right")
-                            .onePlusText(.caption)
-                            .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
-                    }
-                    .padding(.horizontal, NetToysMenuLayout.disclosureHorizontalPadding)
-                    .padding(.vertical, NetToysMenuLayout.disclosureVerticalPadding)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+            header
+            if let join = autoJoin { autoJoinCard(join).padding(.bottom, 8) }
+            latencyCard
+            Color.clear.frame(height: 8)
+            statusCard
+            separator
+            speedRow
+            copyRow
+            systemRow
+            separator
+            NetToysMenuItem(title: "Open Sam's NetToys", key: "⌘O") { openPage(.scanner) }
+                .keyboardShortcut("o")
+            NetToysMenuItem(title: "Settings…", key: "⌘,") { openPage(.settings) }
+                .keyboardShortcut(",")
+        }
+        .padding(.bottom, 6)
+        .frame(width: 360)
+        .background(Panel.fill)
+        .scaleEffect(visible || reduceMotion ? 1 : 0.96, anchor: .top)
+        .opacity(visible ? 1 : 0)
+        .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.25, dampingFraction: 0.9), value: visible)
+    }
+
+    // MARK: Header: headline and subtitle only.
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(headline).font(.system(size: 20, weight: .semibold)).foregroundStyle(Dense.label)
+                .monospacedDigit().lineLimit(1)
+            Text(subtitle).font(.system(size: 12)).foregroundStyle(Dense.secondary).monospacedDigit().lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Panel.edge).padding(.top, 16).padding(.bottom, 12)
+    }
+
+    private var headline: String {
+        guard snapshot.isLoaded else { return "Checking…" }
+        let state = snapshot.isOnline ? "Online" : "Offline"
+        guard let since = snapshot.stateSince else { return state }
+        return "\(state) for \(NetToysDuration.text(now.timeIntervalSince(since)))"
+    }
+
+    private var subtitle: String {
+        let network = snapshot.ssid ?? snapshot.route.map { NetworkIdentity(networkID: $0.networkID, ssid: nil).displayName }
+        return [network, snapshot.localNetwork?.address.description,
+                snapshot.gatewayMilliseconds.map { "\(Int($0.rounded())) ms" }]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    // MARK: Outage auto-join
+
+    private struct AutoJoin { let next: String; let current: String; let seconds: Int; let fraction: Double }
+
+    private var autoJoin: AutoJoin? {
+        let priority = snapshot.configuration.wifiPriority
+        guard priority.isEnabled, let failover = snapshot.helperStatus?.wifiFailover, failover.state == .waiting,
+              let current = snapshot.ssid ?? snapshot.helperStatus?.network?.ssid,
+              let index = priority.ssids.firstIndex(of: current), index + 1 < priority.ssids.count
+        else { return nil }
+        let left = max(0, priority.outageThreshold - now.timeIntervalSince(failover.updatedAt))
+        return AutoJoin(next: priority.ssids[index + 1], current: current, seconds: Int(left.rounded(.up)),
+                        fraction: priority.outageThreshold > 0 ? 1 - left / priority.outageThreshold : 1)
+    }
+
+    private func autoJoinCard(_ join: AutoJoin) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi").font(.system(size: 13, weight: .semibold)).foregroundStyle(Dense.accent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Joining \(join.next) in \(NetToysDuration.text(TimeInterval(join.seconds)))")
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Dense.label).monospacedDigit()
+                    Text("Next network in your Wi-Fi Priority list").font(.system(size: 11)).foregroundStyle(Dense.secondary)
                 }
-                .buttonStyle(OnePlusInteractionStyle(radius: OnePlusMetrics.controlRadius))
-                .accessibilityLabel("\(isExpanded.wrappedValue ? "Hide" : "Show") \(title) activity")
-                Toggle(title, isOn: isOn)
-                    .labelsHidden()
-                    .toggleStyle(OnePlusSwitchStyle())
-                    .disabled(disabled)
             }
-            .padding(.horizontal, 1)
-            .onePlusRowHover(radius: OnePlusMetrics.menuTileRadius)
-            if isExpanded.wrappedValue {
-                VStack(spacing: 0) { content() }
-                    .padding(.leading, OnePlusMetrics.compactControlHeight + OnePlusMenuMetrics.tileGap)
-                    .padding(.horizontal, OnePlusMenuMetrics.bodyInset)
-                    .padding(.bottom, OnePlusMenuMetrics.tileGap)
+            Capsule().fill(Dense.track).frame(height: 4).overlay(alignment: .leading) {
+                GeometryReader { proxy in Capsule().fill(Dense.accent).frame(width: proxy.size.width * join.fraction) }
+            }
+            // stub: Join Now and Stay need a failover command in NetToysCore; both stay disabled until it exists.
+            HStack(spacing: 8) {
+                Button("Join Now") {}.buttonStyle(DenseCapsuleButtonStyle(prominent: true))
+                Button("Stay on \(join.current)") {}.buttonStyle(DenseCapsuleButtonStyle())
+            }
+            .disabled(true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Panel.card))
+        .padding(.horizontal, 10)
+    }
+
+    // MARK: Cards
+
+    private var latencyCard: some View {
+        let values = snapshot.latencySamples.compactMap { $0 }
+        let lost = snapshot.latencySamples.filter { $0 == nil }.count
+        let average = values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+        let loss = snapshot.latencySamples.isEmpty ? 0 : Double(lost) / Double(snapshot.latencySamples.count) * 100
+        return VStack(spacing: 0) {
+            NetToysLatencyChart(values: snapshot.latencySamples.map { $0 ?? 0 })
+                .frame(height: 42).padding(.top, 8)
+            HStack {
+                Text("Latency, gateway").foregroundStyle(Dense.secondary)
+                Spacer()
+                Text(average.map { "Avg \(Int($0.rounded())) ms · Loss \(loss.formatted(.number.precision(.fractionLength(0...1))))%" } ?? "No samples yet")
+                    .foregroundStyle(Dense.secondary).monospacedDigit()
+            }
+            .font(.system(size: 11)).padding(.horizontal, 10).padding(.vertical, 7)
+        }
+        .background(Panel.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 10)
+    }
+
+    private var statusCard: some View {
+        let internet = snapshot.helperStatus?.network?.internet
+        let monitored = snapshot.configuration.monitoredAnchors
+        let statuses = snapshot.helperStatus?.anchors ?? []
+        let failing = monitored.filter { anchor in
+            statuses.first { $0.anchorID == anchor.id }.map { [.fallbackUnavailable, .notFound, .ambiguous].contains($0.state) } ?? false
+        }.count
+        return VStack(spacing: 0) {
+            statusRow("Internet", internet == .reachable ? "Working" : internet == .unreachable ? "Down" : "Unknown",
+                      tone: internet == .unreachable ? Panel.red : nil)
+            // stub: the DNS check is not built yet.
+            statusRow("DNS", "Not checked")
+            statusRow("Outages today", snapshot.outagesToday == 0 ? "None"
+                      : "\(snapshot.outagesToday), for \(NetToysDuration.text(snapshot.outageSecondsToday))")
+            statusRow("SSH Anchor", monitored.isEmpty ? "Off" : "\(monitored.count - failing) of \(monitored.count) hosts",
+                      tone: failing > 0 ? Dense.amber : nil)
+            statusRow("Devices", snapshot.deviceCount.map { "\($0), \(snapshot.offlineDeviceCount) offline" } ?? "No scan yet",
+                      last: true)
+        }
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Panel.card))
+        .padding(.horizontal, 10)
+    }
+
+    private func statusRow(_ label: String, _ value: String, tone: Color? = nil, last: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Text(label).foregroundStyle(Dense.label)
+            Spacer(minLength: 8)
+            if let tone { Circle().fill(tone).frame(width: 6, height: 6) }
+            Text(value).foregroundStyle(tone ?? Dense.secondary).monospacedDigit().lineLimit(1)
+        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 10).frame(height: 28)
+        .overlay(alignment: .bottom) {
+            if !last { Rectangle().fill(Panel.separator).frame(height: 0.5).padding(.horizontal, 10) }
+        }
+    }
+
+    private var separator: some View {
+        Rectangle().fill(Panel.separator).frame(height: 0.5).padding(.horizontal, Panel.edge).padding(.vertical, 6)
+    }
+
+    // MARK: Action rows
+
+    @ViewBuilder private var speedRow: some View {
+        if case .running(let started) = speedTest.phase {
+            TimelineView(.periodic(from: started, by: 0.25)) { context in
+                let fraction = min(context.date.timeIntervalSince(started) / NetToysSpeedTest.maximumSeconds, 0.97)
+                // shortcut: networkQuality -c reports only at the end, so the row shows the elapsed share, not a live Mbps value; parse its verbose output when a live value is needed.
+                NetToysWellRow(symbol: "gauge.with.dots.needle.67percent", title: "Testing speed…",
+                               detail: "Measuring download", value: "Stop", valueIsAction: true, ring: fraction) {
+                    speedTest.stop()
+                }
+            }
+        } else {
+            let failed: Bool = if case .failed = speedTest.phase { true } else { false }
+            NetToysWellRow(symbol: "gauge.with.dots.needle.67percent", title: "Run Speed Test",
+                           detail: failed ? "The last test did not finish" : nil,
+                           value: speedTest.lastMbps.map { "Last \(Int($0.rounded())) Mbps" }) {
+                speedTest.start()
             }
         }
     }
 
-    private func anchorRow(_ anchor: SSHAnchorConfiguration) -> some View {
-        let status = snapshot.helperStatus?.anchors.first { $0.anchorID == anchor.id }
-        return activityRow(
-            symbol: status?.state == .healthy ? "checkmark.circle" : "link",
-            title: anchor.hostAlias,
-            detail: status.map { "\($0.currentHostName) · \($0.lastCheck.formatted(date: .omitted, time: .shortened))" }
-                ?? anchor.hostName
-        )
-    }
-
-    private func activityRow(symbol: String, title: String, detail: String) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: symbol)
-                .onePlusText(.caption)
-                .frame(width: OnePlusMetrics.compactControlHeight)
-            Text(title).onePlusText(.row).lineLimit(1).help(title)
-            Spacer(minLength: 4)
-            Text(detail).onePlusText(.caption).lineLimit(1).help(detail)
+    private var copyRow: some View {
+        let address = snapshot.localNetwork?.address.description
+        return NetToysWellRow(symbol: copied ? "checkmark" : "doc.on.doc",
+                              title: copied ? "Copied" : "Copy IP Address",
+                              value: address ?? "None", tone: copied ? Dense.green : nil) {
+            guard let address else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(address, forType: .string)
+            copied = true
+            Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
         }
-        .padding(.vertical, OnePlusMenuMetrics.tileGap)
-        .onePlusRowHover(radius: OnePlusMetrics.controlRadius)
+        .disabled(address == nil)
     }
 
-    private func emptyActivity(_ message: String) -> some View {
-        Text(message)
-            .onePlusText(.caption)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, OnePlusMenuMetrics.tileGap)
-    }
-
-    private func openPageButton(_ title: String, page: NetToysPage) -> some View {
-        Button { open(page) } label: {
-            Label(title, systemImage: "arrow.up.forward.square")
-                .onePlusText(.caption, color: OnePlusColor.secondary)
-                .frame(maxWidth: .infinity, minHeight: OnePlusMetrics.compactControlHeight, alignment: .leading)
-                .contentShape(Rectangle())
+    private var systemRow: some View {
+        let (symbol, tone, title, action): (String, Color, String, String) = switch system {
+        case .running: ("checkmark", Dense.green, "System Up", "Pause")
+        case .warning(let count): ("exclamationmark", Dense.amber, "System Up, \(count) \(count == 1 ? "Warning" : "Warnings")", "Details")
+        case .paused: ("pause.fill", Dense.secondary, "System Paused", "Resume")
+        case .failed: ("xmark", Panel.red, "System Failed", "Details")
         }
-        .buttonStyle(OnePlusInteractionStyle(radius: OnePlusMetrics.controlRadius))
-        .padding(.top, OnePlusMenuMetrics.tileGap)
+        return NetToysWellRow(symbol: symbol, title: title, value: action, valueIsAction: true, softTone: tone) {
+            switch system {
+            case .running, .paused: toggleSystem()
+            case .warning, .failed: openPage(.history)
+            }
+        }
+    }
+}
+
+/// Reports whether the hosting window is on screen, so the panel loads and animates only while open.
+private struct NetToysKeyWindowReader: NSViewRepresentable {
+    let changed: (Bool) -> Void
+
+    func makeNSView(context: Context) -> ReaderView { ReaderView(changed: changed) }
+    func updateNSView(_ view: ReaderView, context: Context) { view.changed = changed }
+
+    final class ReaderView: NSView {
+        var changed: (Bool) -> Void
+        private var observer: NSObjectProtocol?
+
+        init(changed: @escaping (Bool) -> Void) {
+            self.changed = changed
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observer.map(NotificationCenter.default.removeObserver)
+            observer = nil
+            guard let window else { return }
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.report() }
+            }
+            report()
+        }
+
+        private func report() {
+            let visible = window?.occlusionState.contains(.visible) == true
+            DispatchQueue.main.async { [changed] in changed(visible) }
+        }
+    }
+}
+
+// MARK: - Rows
+
+/// Wi-Fi menu style row: a 26 pt round icon well, a label, and a value or a blue action.
+private struct NetToysWellRow: View {
+    let symbol: String
+    let title: String
+    var detail: String?
+    var value: String?
+    var valueIsAction = false
+    /// A solid well, such as the green copied check.
+    var tone: Color?
+    /// A soft tinted well whose glyph carries the state.
+    var softTone: Color?
+    var ring: Double?
+    let action: () -> Void
+    @State private var hovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                well
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(.system(size: 13)).foregroundStyle(Dense.label)
+                    if let detail { Text(detail).font(.system(size: 11)).foregroundStyle(Dense.secondary).monospacedDigit() }
+                }
+                Spacer(minLength: 8)
+                if let value {
+                    Text(value).font(.system(size: 13)).foregroundStyle(valueIsAction ? Dense.accent : Dense.secondary)
+                        .monospacedDigit().lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 14).frame(height: detail == nil ? 34 : 40)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Panel.hover).opacity(hovered && isEnabled ? 1 : 0))
+            .contentShape(Rectangle())
+            .padding(.horizontal, 6)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(Dense.fast, value: hovered)
     }
 
-    private func open(_ page: NetToysPage) {
-        openPage(page)
+    private var well: some View {
+        ZStack {
+            if let ring {
+                Circle().fill(Panel.well)
+                Circle().stroke(Dense.track, lineWidth: 2.5).padding(1.25)
+                Circle().trim(from: 0, to: ring).stroke(Dense.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90)).padding(1.25)
+                Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(Dense.accent)
+            } else if let softTone {
+                Circle().fill(softTone.opacity(0.18))
+                Image(systemName: symbol).font(.system(size: 11, weight: .bold)).foregroundStyle(softTone)
+            } else {
+                Circle().fill(tone ?? Panel.well)
+                Image(systemName: symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(tone == nil ? Dense.label : .white)
+            }
+        }
+        .frame(width: 26, height: 26)
+    }
+}
+
+/// NSMenu style item: 24 pt high, a blue highlight inset 6 pt with an 8 pt radius.
+private struct NetToysMenuItem: View {
+    let title: String
+    let key: String
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(title).foregroundStyle(hovered ? Color.white : Dense.label)
+                Spacer(minLength: 8)
+                Text(key).foregroundStyle(hovered ? Color.white.opacity(0.8) : Dense.tertiary)
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 14).frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Dense.accent).opacity(hovered ? 1 : 0))
+            .contentShape(Rectangle())
+            .padding(.horizontal, 6)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+    }
+}
+
+/// Gateway latency, edge to edge, with a soft fill.
+private struct NetToysLatencyChart: View {
+    let values: [Double]
+
+    var body: some View {
+        let top = max(20, (values.max() ?? 0) * 1.3)
+        ZStack {
+            LineShape(values: values, top: top, closed: true)
+                .fill(LinearGradient(colors: [Dense.accent.opacity(0.28), Dense.accent.opacity(0.02)],
+                                     startPoint: .top, endPoint: .bottom))
+            LineShape(values: values, top: top, closed: false)
+                .stroke(Dense.accent, style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
+        }
     }
 
-    private func save(_ edit: (inout NetToysConfiguration) -> Void) {
-        let original = configuration
-        var edited = original
-        edit(&edited)
-        do {
-            configuration = try NetToysConfigurationStore.saveChanges(edited, since: original)
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+    private struct LineShape: Shape {
+        let values: [Double]
+        let top: Double
+        let closed: Bool
+
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            guard values.count > 1 else { return path }
+            let step = rect.width / CGFloat(values.count - 1)
+            for (index, value) in values.enumerated() {
+                let point = CGPoint(x: rect.minX + CGFloat(index) * step,
+                                    y: rect.maxY - CGFloat(min(value / top, 1)) * rect.height)
+                if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            if closed {
+                path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+                path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+                path.closeSubpath()
+            }
+            return path
         }
     }
 }
