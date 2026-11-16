@@ -125,8 +125,11 @@ public struct NetToysWindowView: View {
     @State private var localNetworkAccess: NetToysLocalNetworkAccess
     @State private var openDevice: String?
     @AppStorage("nettoys.devices.scope") private var deviceScope = NetToysDeviceScope.all
-    @AppStorage("nettoys.pauseAll") private var pausedAll = false
+    @State private var configuration: NetToysConfiguration
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Pause or safe mode: every automatic action is held.
+    private var pausedAll: Bool { configuration.actionsPaused || configuration.safeModeReason != nil }
 
     public init(host: NetToysHost, page: Binding<NetToysPage>, enabled: Binding<Bool>,
                 isTransitioning: Bool = false, consumePrefill: @escaping () -> NetToysScanPrefill? = { nil }) {
@@ -137,7 +140,8 @@ public struct NetToysWindowView: View {
     /// Takes a prepared scanner model, so offscreen renders can use synthetic devices.
     init(host: NetToysHost, page: Binding<NetToysPage>, enabled: Binding<Bool>, isTransitioning: Bool = false,
          consumePrefill: @escaping () -> NetToysScanPrefill? = { nil }, scannerModel: NetToysScannerViewModel,
-         openDevice: String? = nil) {
+         openDevice: String? = nil, configuration: NetToysConfiguration = NetToysConfiguration()) {
+        _configuration = State(initialValue: configuration)
         self.host = host
         _page = page
         _enabled = enabled
@@ -198,6 +202,13 @@ public struct NetToysWindowView: View {
             scannerModel.applyPrefill(consumePrefill())
             localNetworkAccess.request()
             await scannerModel.loadStoredState()
+        }
+        .task {
+            // The menu panel and safe mode change the pause too, so keep reading the saved state.
+            while !Task.isCancelled {
+                configuration = await Task.detached(priority: .utility) { NetToysConfigurationStore.load() }.value
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .netToysHistoryCleared)) { _ in
             scannerModel.clearRestoredResults()
@@ -274,18 +285,22 @@ public struct NetToysWindowView: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    /// stub: the pause only dims and disables the window's actions; the background services do not read it yet.
+    /// Pause and Resume write the saved configuration; Resume also ends safe mode.
     private var pauseRow: some View {
-        HStack(spacing: 8) {
+        let safeMode = configuration.safeModeReason != nil
+        return HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(pausedAll ? "All actions paused" : "Pause all actions")
+                Text(safeMode ? "Safe mode is on" : pausedAll ? "All actions paused" : "Pause all actions")
                     .font(.system(size: 12, weight: pausedAll ? .medium : .regular))
                     .foregroundStyle(pausedAll ? Dense.amber : Dense.label)
-                Text(pausedAll ? "Click play to resume" : "Actions run normally")
+                Text(pausedAll ? "Click play to resume" : configuration.dryRun ? "Dry run: nothing changes" : "Actions run normally")
                     .font(.system(size: 11)).foregroundStyle(Dense.tertiary)
             }
+            .help(configuration.safeModeReason ?? "")
             Spacer(minLength: 0)
-            Button { pausedAll.toggle() } label: {
+            Button {
+                if let saved = try? NetToysConfigurationStore.setActionsPaused(!pausedAll) { configuration = saved }
+            } label: {
                 Image(systemName: pausedAll ? "play.fill" : "pause.fill")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(pausedAll ? Color.white : Dense.label)
@@ -326,12 +341,14 @@ public struct NetToysWindowView: View {
             NetToysWiFiPriorityView()
         case .settings:
             OnePlusPage {
-                OnePlusPageHeader(title: "Settings", subtitle: "Permissions and scanner preferences")
+                OnePlusPageHeader(title: "Settings", subtitle: "Permissions, scanner, and safety")
             } tabs: {
-                OnePlusTabStrip(tabs: [OnePlusTab("permissions", "Permissions"), OnePlusTab("scanner", "Scanner")],
+                OnePlusTabStrip(tabs: [OnePlusTab("permissions", "Permissions"), OnePlusTab("scanner", "Scanner"),
+                                       OnePlusTab("safety", "Safety")],
                                 selection: $settingsSection)
             } content: {
                 if settingsSection == "scanner" { NetToysScannerSettingsView(model: scannerModel) }
+                else if settingsSection == "safety" { NetToysSafetySettingsView() }
                 else { NetToysSettingsView(host: host, enabled: $enabled, isTransitioning: isTransitioning) }
             }
         case .howToUse:
