@@ -15,11 +15,20 @@ panel details are still open (redesign in progress).
   Pause all actions is a large play/pause button at the top right. During
   an outage it says which priority network it is joining next. The bottom
   button stays "Open Sam's NetToys".
+- Panel layout: "Headline with auto-join". During an outage it shows
+  "Joining <next network> in 45 sec" with Join Now and Stay on <current>.
+  Action buttons: Run Speed Test and Copy IP Address only.
+- Device modal: a centered, tall single column (about 440 pt) over the
+  blurred, dimmed window. Its actions are compact buttons (refinement
+  open).
 - Look: "Dense pro" polish.
 - Durations: full hours, "min", "sec", for example "1 hour 52 min".
 - Motion: hover fades in, selection is instant. The menu panel grows from
-  its menu bar icon. Pause all actions shows a note and dims the actions.
-  All motion is fast and responsive.
+  its menu bar icon. Pause all actions dims the actions quietly, with no
+  note bar in the window. Scan: a 1 pt progress line and a count, rows
+  fade in over 80 ms. Device modal: scale and blur in (about 180 ms).
+  Filter: rows that do not match fade out, then the rest glide into place
+  fast. All motion is fast and responsive.
 
 ## Features
 
