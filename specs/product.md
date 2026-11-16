@@ -25,6 +25,8 @@ panel details are still open (redesign in progress).
   Copy IP Address) and a "..." menu (Add to SSH Anchor, Copy MAC Address,
   Forget Device). Sections: Details, Open ports (watch switches),
   Latency (average first, 24 hours), Alerts, Comment.
+- Panel header: the headline has no dot. The status dot ends the
+  subtitle: "Home-5G · 192.168.1.20 · 18 ms ●".
 - Panel bottom: Wi-Fi-menu-style rows with round icon wells. "Run Speed
   Test" runs inside its row (progress ring, live "Download 286 Mbps",
   Stop); when idle it shows the last result, such as "Last 412 Mbps".
