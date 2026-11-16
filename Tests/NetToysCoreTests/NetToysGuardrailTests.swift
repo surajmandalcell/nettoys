@@ -85,4 +85,60 @@ final class NetToysGuardrailTests: XCTestCase {
         XCTAssertFalse(SSHHostKeyProof.keysMatch(stored: "@revoked * ssh-ed25519 AAAAkeyA", scanned: "h ssh-ed25519 AAAAkeyA"))
         XCTAssertFalse(SSHHostKeyProof.keysMatch(stored: "", scanned: ""))
     }
+
+    private struct Failure: LocalizedError {
+        var errorDescription: String? { "join failed" }
+    }
+
+    func testSafeModeStartsAfterThreeFailuresInTenMinutes() throws {
+        var gate = NetToysActionGate(log: NetToysActionLog(url: paths.actionLog))
+        let settings = NetToysConfiguration()
+        XCTAssertTrue(gate.allows(.wifiJoin, "Switched Wi-Fi", settings: settings))
+
+        // Spread over more than ten minutes: no safe mode.
+        XCTAssertNil(gate.finish(.wifiJoin, "a", error: Failure(), at: 0))
+        XCTAssertNil(gate.finish(.wifiJoin, "b", error: Failure(), at: 400))
+        XCTAssertNil(gate.finish(.wifiJoin, "c", error: Failure(), at: 700))
+        XCTAssertEqual(gate.warningCount(at: 700), 2)
+        XCTAssertEqual(NetToysSystemHealth.make(settings: settings, warnings: 2), .warning(count: 2))
+
+        // The third failure inside ten minutes starts safe mode, and safe mode holds every action.
+        let reason = try XCTUnwrap(gate.finish(.wifiJoin, "d", error: Failure(), at: 800))
+        XCTAssertTrue(reason.contains("join failed"))
+        var held = settings
+        held.safeModeReason = reason
+        XCTAssertFalse(gate.allows(.sshHostName, "Changed jetson", settings: held))
+        XCTAssertEqual(NetToysSystemHealth.make(settings: held, warnings: 0), .failed(reason: reason))
+        held.safeModeReason = nil
+        held.actionsPaused = true
+        XCTAssertEqual(NetToysSystemHealth.make(settings: held, warnings: 0), .paused)
+
+        let log = NetToysActionLog(url: paths.actionLog).entries()
+        XCTAssertEqual(log.first?.kind, .safeMode)
+        XCTAssertEqual(log.filter { $0.outcome == .failed }.count, 4)
+    }
+
+    func testDryRunLogsTheActionAndChangesNothing() throws {
+        let config = paths.sshConfig
+        let original = Data("Host jetson\n  HostName 192.168.1.8\n".utf8)
+        try original.write(to: config)
+        let gate = NetToysActionGate(log: NetToysActionLog(url: paths.actionLog))
+        var settings = NetToysConfiguration()
+        settings.dryRun = true
+        let undo = NetToysUndo.sshHostName(anchorID: UUID(), hostAlias: "jetson", from: "192.168.1.8", to: "192.168.1.44")
+
+        var wrote = false
+        if gate.allows(.sshHostName, "Changed jetson HostName", undo: undo, settings: settings) {
+            _ = try SSHConfigFileUpdater.update(configURL: config, backupDirectory: paths.backups, hostAlias: "jetson",
+                                                expectedHostName: "192.168.1.8", newHostName: "192.168.1.44")
+            wrote = true
+        }
+
+        XCTAssertFalse(wrote)
+        XCTAssertEqual(try Data(contentsOf: config), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.backups.path))
+        let entries = NetToysActionLog(url: paths.actionLog).entries()
+        XCTAssertEqual(entries.map(\.outcome), [.dryRun])
+        XCTAssertNil(NetToysActionLog(url: paths.actionLog).lastUndoable(), "A dry run has nothing to undo.")
+    }
 }

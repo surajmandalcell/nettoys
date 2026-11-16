@@ -696,6 +696,12 @@ public nonisolated struct NetToysConfiguration: Codable, Equatable, Sendable {
     public var recordsNetworkHistory: Bool
     public var wifiPriority: WiFiPriorityConfiguration
     public var backgroundRequests: Set<NetToysHostID>
+    /// "Pause all actions": no automatic change while true.
+    public var actionsPaused: Bool
+    /// Log what each automatic action would do and change nothing.
+    public var dryRun: Bool
+    /// Set by the runtime after 3 failed actions in 10 minutes; Resume clears it.
+    public var safeModeReason: String?
 
     public init(
         probeInterval: TimeInterval = 2.5,
@@ -703,7 +709,10 @@ public nonisolated struct NetToysConfiguration: Codable, Equatable, Sendable {
         anchors: [SSHAnchorConfiguration] = [],
         recordsNetworkHistory: Bool = true,
         wifiPriority: WiFiPriorityConfiguration = WiFiPriorityConfiguration(),
-        backgroundRequests: Set<NetToysHostID> = []
+        backgroundRequests: Set<NetToysHostID> = [],
+        actionsPaused: Bool = false,
+        dryRun: Bool = false,
+        safeModeReason: String? = nil
     ) {
         self.probeInterval = min(max(probeInterval, 2), 3)
         self.sshAnchorEnabled = sshAnchorEnabled
@@ -711,6 +720,9 @@ public nonisolated struct NetToysConfiguration: Codable, Equatable, Sendable {
         self.recordsNetworkHistory = recordsNetworkHistory
         self.wifiPriority = wifiPriority
         self.backgroundRequests = backgroundRequests
+        self.actionsPaused = actionsPaused
+        self.dryRun = dryRun
+        self.safeModeReason = safeModeReason
     }
 
     public init(from decoder: Decoder) throws {
@@ -727,7 +739,10 @@ public nonisolated struct NetToysConfiguration: Codable, Equatable, Sendable {
                 WiFiPriorityConfiguration.self,
                 forKey: .wifiPriority
             ) ?? WiFiPriorityConfiguration(),
-            backgroundRequests: try values.decodeIfPresent(Set<NetToysHostID>.self, forKey: .backgroundRequests) ?? []
+            backgroundRequests: try values.decodeIfPresent(Set<NetToysHostID>.self, forKey: .backgroundRequests) ?? [],
+            actionsPaused: try values.decodeIfPresent(Bool.self, forKey: .actionsPaused) ?? false,
+            dryRun: try values.decodeIfPresent(Bool.self, forKey: .dryRun) ?? false,
+            safeModeReason: try values.decodeIfPresent(String.self, forKey: .safeModeReason)
         )
     }
 
@@ -749,6 +764,9 @@ public nonisolated struct NetToysConfiguration: Codable, Equatable, Sendable {
         if edited.sshAnchorEnabled != original.sshAnchorEnabled { sshAnchorEnabled = edited.sshAnchorEnabled }
         if edited.recordsNetworkHistory != original.recordsNetworkHistory { recordsNetworkHistory = edited.recordsNetworkHistory }
         if edited.wifiPriority != original.wifiPriority { wifiPriority = edited.wifiPriority }
+        if edited.actionsPaused != original.actionsPaused { actionsPaused = edited.actionsPaused }
+        if edited.dryRun != original.dryRun { dryRun = edited.dryRun }
+        if edited.safeModeReason != original.safeModeReason { safeModeReason = edited.safeModeReason }
         let removed = Set(original.anchors.map(\.id)).subtracting(edited.anchors.map(\.id))
         anchors.removeAll { removed.contains($0.id) }
         for anchor in edited.anchors {
@@ -944,11 +962,14 @@ public nonisolated struct NetToysHelperStatus: Codable, Equatable, Sendable {
     public var ownerBundleID: String?
     public var ownerPID: Int32?
     public var packageVersion: String?
+    /// Running, warning(count), paused, or failed(reason), for the System row.
+    public var system: NetToysSystemHealth?
 
     public init(version: Int, heartbeat: Date, anchors: [SSHAnchorStatus], network: NetworkRuntimeSnapshot? = nil,
                 sourceCommit: String? = nil, ssidAccess: NetToysSSIDAccessState? = nil,
                 wifiFailover: WiFiFailoverStatus? = nil, ownerBundleID: String? = nil,
-                ownerPID: Int32? = nil, packageVersion: String? = nil) {
+                ownerPID: Int32? = nil, packageVersion: String? = nil, system: NetToysSystemHealth? = nil) {
+        self.system = system
         self.version = version
         self.heartbeat = heartbeat
         self.anchors = anchors
@@ -1196,11 +1217,30 @@ public nonisolated enum NetToysConfigurationStore {
     @discardableResult
     public static func setBackgroundRequest(_ enabled: Bool, for host: NetToysHostID,
                                             to url: URL = NetToysPaths.configuration) throws -> NetToysConfiguration {
+        try update(at: url) {
+            if enabled { $0.backgroundRequests.insert(host) } else { $0.backgroundRequests.remove(host) }
+        }
+    }
+
+    /// "Pause all actions" and Resume. Resume also ends safe mode.
+    @discardableResult
+    public static func setActionsPaused(_ paused: Bool,
+                                        at url: URL = NetToysPaths.configuration) throws -> NetToysConfiguration {
+        try update(at: url) {
+            $0.actionsPaused = paused
+            if !paused { $0.safeModeReason = nil }
+        }
+    }
+
+    /// Changes the latest saved configuration under the store lock.
+    @discardableResult
+    public static func update(at url: URL = NetToysPaths.configuration,
+                              _ change: (inout NetToysConfiguration) -> Void) throws -> NetToysConfiguration {
         try NetToysStoreTransaction.withLock(at: url.deletingLastPathComponent()) {
             var latest = FileManager.default.fileExists(atPath: url.path)
                 ? try JSONDecoder().decode(NetToysConfiguration.self, from: Data(contentsOf: url))
                 : NetToysConfiguration()
-            if enabled { latest.backgroundRequests.insert(host) } else { latest.backgroundRequests.remove(host) }
+            change(&latest)
             try JSONEncoder().encode(latest).write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             return latest

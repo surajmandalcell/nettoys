@@ -80,12 +80,45 @@ public actor NetToysHelperRuntime {
 
     private let paths: NetToysRuntimePaths
     private var nextSnapshotCheck = Date.distantPast
+    private var nextLogPrune = Date.distantPast
     private var nextHomeCheck: [UUID: Date] = [:]
+    private var gate: NetToysActionGate
+    /// Monotonic seconds; wall-clock jumps never shorten a wait.
+    private let uptime: @Sendable () -> TimeInterval
 
     public init(owner: NetToysHostID, paths: NetToysRuntimePaths = .standard) {
         self.owner = owner
         self.paths = paths
         scanner = NetToysScanner()
+        gate = NetToysActionGate(log: NetToysActionLog(url: paths.actionLog))
+        uptime = { ProcessInfo.processInfo.systemUptime }
+    }
+
+    /// Runs an automatic change through pause, safe mode, dry run, and the action log.
+    /// Throws `ActionHeld` when nothing may change.
+    private func perform(_ kind: NetToysActionKind, _ summary: String, undo: NetToysUndo? = nil,
+                         _ body: () async throws -> Void) async throws {
+        guard gate.allows(kind, summary, undo: undo, settings: cachedConfiguration) else {
+            throw ActionHeld(dryRun: cachedConfiguration.dryRun && !NetToysActionGate.isHeld(cachedConfiguration))
+        }
+        do {
+            try await body()
+            _ = gate.finish(kind, summary, undo: undo, error: nil, at: uptime())
+        } catch {
+            if let reason = gate.finish(kind, summary, error: error, at: uptime()) {
+                if let saved = try? NetToysConfigurationStore.update({ $0.safeModeReason = reason }) {
+                    cachedConfiguration = saved
+                }
+            }
+            throw error
+        }
+    }
+
+    struct ActionHeld: LocalizedError {
+        let dryRun: Bool
+        var errorDescription: String? {
+            dryRun ? "Dry run: the change is in the action log and nothing changed." : "Automatic actions are paused."
+        }
     }
 
     nonisolated static func localSwitchCandidate(
@@ -135,6 +168,10 @@ public actor NetToysHelperRuntime {
             nextSnapshotCheck = Date().addingTimeInterval(3_600)
             NetToysSSHBackups.snapshotIfDue(configURL: paths.sshConfig, in: paths.backups)
         }
+        if Date() >= nextLogPrune {
+            nextLogPrune = Date().addingTimeInterval(86_400)
+            try? gate.log.prune()
+        }
 
         var statuses: [SSHAnchorStatus] = []
         for anchor in configuration.anchors {
@@ -161,8 +198,13 @@ public actor NetToysHelperRuntime {
 
     private func check(_ configuredAnchor: SSHAnchorConfiguration) async -> SSHAnchorStatus {
         guard configuredAnchor.isEnabled else { return status(configuredAnchor, .idle) }
+        if NetToysActionGate.isHeld(cachedConfiguration) {
+            let open = await TCPPortProbe.check(host: configuredAnchor.hostName, port: configuredAnchor.port,
+                                                timeoutMilliseconds: 900).state == .open
+            return status(configuredAnchor, open ? .healthy : .unavailable, open ? nil : "Automatic actions are paused.")
+        }
         do {
-            try prepareHostKeyPolicy(configuredAnchor)
+            try await prepareHostKeyPolicy(configuredAnchor)
         } catch {
             return status(configuredAnchor, .error, error.localizedDescription)
         }
@@ -447,16 +489,23 @@ public actor NetToysHelperRuntime {
               current.hostName == original.hostName
         else { throw NetToysConfiguration.ConfigurationError.anchorNotFound }
         let updated = try latest.replacingAnchor(recovered)
-        try await SSHAnchorVerifiedUpdate.apply(
-            original: original,
-            recovered: recovered,
-            configURL: paths.sshConfig,
-            backupDirectory: paths.backups,
-            verify: { host, port in
-                await TCPPortProbe.check(host: host, port: port, timeoutMilliseconds: 900).state == .open
-            },
-            commit: { _ = try NetToysConfigurationStore.saveChanges(updated, since: latest) }
-        )
+        let summary = "Changed \(original.hostAlias) HostName from \(original.hostName) to \(recovered.hostName)"
+        let undo = NetToysUndo.sshHostName(anchorID: original.id, hostAlias: original.hostAlias,
+                                           from: original.hostName, to: recovered.hostName)
+        let configURL = paths.sshConfig
+        let backups = paths.backups
+        try await perform(.sshHostName, summary, undo: undo) {
+            try await SSHAnchorVerifiedUpdate.apply(
+                original: original,
+                recovered: recovered,
+                configURL: configURL,
+                backupDirectory: backups,
+                verify: { host, port in
+                    await TCPPortProbe.check(host: host, port: port, timeoutMilliseconds: 900).state == .open
+                },
+                commit: { _ = try NetToysConfigurationStore.saveChanges(updated, since: latest) }
+            )
+        }
     }
 
     private func saveAnchorMetadata(
@@ -488,14 +537,24 @@ public actor NetToysHelperRuntime {
         return copy
     }
 
-    private func prepareHostKeyPolicy(_ anchor: SSHAnchorConfiguration) throws {
+    private func prepareHostKeyPolicy(_ anchor: SSHAnchorConfiguration) async throws {
         guard !preparedAnchorPolicies.contains(anchor.id) else { return }
-        _ = try SSHConfigFileUpdater.prepareAnchor(
-            configURL: paths.sshConfig,
-            backupDirectory: paths.backups,
-            hostAlias: anchor.hostAlias,
-            knownHostsAlias: anchor.knownHostsAlias
-        )
+        let configURL = paths.sshConfig
+        let backups = paths.backups
+        let current = try Data(contentsOf: configURL.resolvingSymlinksInPath())
+        let prepared = try SSHConfigEditor.preparingAnchor(in: current, hostAlias: anchor.hostAlias,
+                                                           knownHostsAlias: anchor.knownHostsAlias)
+        if prepared != current {
+            do {
+                try await perform(.sshPolicy, "Added the SSH Anchor host key policy for \(anchor.hostAlias)") {
+                    _ = try SSHConfigFileUpdater.prepareAnchor(configURL: configURL, backupDirectory: backups,
+                                                               hostAlias: anchor.hostAlias,
+                                                               knownHostsAlias: anchor.knownHostsAlias)
+                }
+            } catch let held as ActionHeld where held.dryRun {
+                // Logged once; the dry run goes on without the policy block.
+            }
+        }
         preparedAnchorPolicies.insert(anchor.id)
     }
 
@@ -552,6 +611,11 @@ public actor NetToysHelperRuntime {
     ) async {
         guard configuration.isEnabled else { return }
         let date = Date()
+        guard !NetToysActionGate.isHeld(cachedConfiguration) else {
+            wifiFailoverStatus = WiFiFailoverStatus(state: .monitoring, message: "Automatic actions are paused.",
+                                                    updatedAt: date)
+            return
+        }
         guard !(hasActiveRoute && currentSSID == nil) else {
             wifiFailoverStatus = WiFiFailoverStatus(
                 state: .failed,
@@ -600,7 +664,10 @@ public actor NetToysHelperRuntime {
             return
         }
         do {
-            try await WiFiNetworkController.join(target)
+            try await perform(.wifiJoin, "Switched Wi-Fi from \(currentSSID ?? "no network") to \(target)",
+                              undo: currentSSID.map { .wifi(previousSSID: $0) }) {
+                try await WiFiNetworkController.join(target)
+            }
             wifiFailoverStatus = WiFiFailoverStatus(
                 state: .switching,
                 message: "Joined \(target). Checking Internet access.",
@@ -692,7 +759,8 @@ public actor NetToysHelperRuntime {
             wifiFailover: wifiFailoverStatus,
             ownerBundleID: owner.rawValue,
             ownerPID: ProcessInfo.processInfo.processIdentifier,
-            packageVersion: NetToysBuild.packageVersion
+            packageVersion: NetToysBuild.packageVersion,
+            system: .make(settings: cachedConfiguration, warnings: gate.warningCount(at: uptime()))
         )
     }
 }
