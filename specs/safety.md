@@ -1,6 +1,7 @@
 # Safety, performance, and testing
 
-Owner decisions of 2026-11-16. Code does not match this yet; this is the target.
+Owner decisions of 2026-11-16. "No privileged parts" is in the code; the
+other sections are the target.
 
 ## No privileged parts
 

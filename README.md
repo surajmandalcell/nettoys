@@ -40,9 +40,9 @@
    Privacy & Security**.
 2. Allow **Local Network** access when you first scan. Allow **Location** if you
    want Wi-Fi names; macOS hides network names without it.
-3. Turn on monitoring in **Settings**. macOS asks you once to approve the
-   Sam's NetToys helper in **System Settings → General → Login Items**. The helper
-   runs SSH Anchor, Wi-Fi Priority, and Network History while the app is closed.
+3. Turn on monitoring in **Settings**. Sam's NetToys then starts at login and
+   stays in the menu bar after you close its window. It runs SSH Anchor, Wi-Fi
+   Priority, and Network History until you quit it.
 
 Settings shows the state of each permission and a button that opens the right
 privacy pane.
@@ -67,7 +67,7 @@ Settings and history live in
 - Scanning and SSH Anchor support IPv4 only.
 - macOS starts Instant Hotspot itself. Sam's NetToys can only put it last in the
   order; it cannot connect to it.
-- Neighbor MAC addresses need the approved helper. Without it, macOS hides them.
+- Quitting Sam's NetToys stops monitoring until you open it again.
 - Angry IP Scanner plugins are not supported. Use the built-in custom fetchers
   and openers.
 

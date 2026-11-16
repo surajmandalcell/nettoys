@@ -1,7 +1,7 @@
 # NetToys
 
 Read `goals.md` when present. Work in this checkout on its current branch.
-Use synthetic fixtures for SSH, network, and helper tests.
+Use synthetic fixtures for SSH, network, and monitoring tests.
 
 In the shared workspace, read `../powertoys/spec/troubleshoot/troubleshoot.md`
 first, then its topics for system tools, UI chrome, and verification.
@@ -18,7 +18,7 @@ the missing guidance before implementation. Keep shared rules in one place.
   display name). Package, module, bundle id, and repository names stay
   `NetToys` / `nettoys`.
 - NetToys left MacPowerToys. This repository is its only home and owns the
-  app, the bundled login helper with the neighbor daemon, the menu panel,
+  app (no helper or daemon; see `specs/safety.md`), the menu panel,
   routes, and icons. MacPowerToys keeps only the fan part of its shared
   login helper. Keep existing tags (MacPowerToys pins 1.0.13 until its
   removal lands).

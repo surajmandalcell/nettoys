@@ -19,9 +19,9 @@ or scan results. You should receive a reply within seven days.
   `~/.ssh/config`. It keeps a private backup and verifies the new address.
   Setup may add one marked host-key policy block so an address change does
   not trigger a prompt. A changed host key still stops the connection.
-- The neighbor helper is a signed launch daemon. It answers only signed
-  Sam's NetToys clients over XPC and returns the system neighbor table. It takes no
-  arguments.
+- Sam's NetToys has no privileged or separate background parts. It runs as
+  you, reads neighbor MAC addresses with `/usr/sbin/arp -an`, and monitors
+  only while the app runs.
 - Wi-Fi Priority stores no Wi-Fi passwords. It joins networks that macOS
   already knows.
 - Scans and SSH Anchor run only on networks you choose.
