@@ -975,11 +975,21 @@ package nonisolated enum NetToysScannerStore {
         load(NetToysScanArchive.self, from: NetToysPaths.scanHistory) ?? NetToysScanArchive()
     }
 
-    package static func record(_ run: NetToysScanRun) throws {
-        try NetToysStoreTransaction.withLock(at: NetToysPaths.directory) {
-            var value = archive()
+    /// The saved scan archive stays under this size; the oldest runs go first.
+    static let archiveByteCap = 8 * 1_048_576
+
+    package static func record(_ run: NetToysScanRun, to url: URL = NetToysPaths.scanHistory) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try NetToysStoreTransaction.withLock(at: url.deletingLastPathComponent()) {
+            var value = try NetToysStoreFiles.decodeOrSetAside(NetToysScanArchive.self, from: url) ?? NetToysScanArchive()
             value.append(run)
-            try save(value, to: NetToysPaths.scanHistory)
+            var data = try JSONEncoder().encode(value)
+            while data.count > archiveByteCap, value.runs.count > 1 {
+                value.runs.removeFirst()
+                data = try JSONEncoder().encode(value)
+            }
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
     }
 

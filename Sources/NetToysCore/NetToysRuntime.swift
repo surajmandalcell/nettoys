@@ -1264,6 +1264,20 @@ public nonisolated enum NetToysPaths {
     package static var backups: URL { directory.appendingPathComponent("SSH Backups", isDirectory: true) }
 }
 
+package nonisolated enum NetToysStoreFiles {
+    /// Decodes `url`; nil when the file is missing. A file that does not decode is renamed to
+    /// "<name>.damaged-<seconds>.json" and kept, so the next save never silently replaces it.
+    static func decodeOrSetAside<Value: Decodable>(_ type: Value.Type, from url: URL, now: Date = Date()) throws -> Value? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        if let value = try? JSONDecoder().decode(type, from: data) { return value }
+        let aside = url.deletingPathExtension()
+            .appendingPathExtension("damaged-\(Int(now.timeIntervalSince1970))")
+            .appendingPathExtension(url.pathExtension)
+        try FileManager.default.moveItem(at: url, to: aside)
+        return nil
+    }
+}
+
 public nonisolated enum NetToysConfigurationStore {
     public static func saveChanges(
         _ edited: NetToysConfiguration,
@@ -1336,8 +1350,7 @@ public nonisolated enum NetToysConfigurationStore {
 
     public static func history() -> NetworkHistory {
         (try? NetToysStoreTransaction.withLock(at: NetToysPaths.directory) {
-            guard let data = try? Data(contentsOf: NetToysPaths.history),
-                  var value = try? JSONDecoder().decode(NetworkHistory.self, from: data)
+            guard var value = try NetToysStoreFiles.decodeOrSetAside(NetworkHistory.self, from: NetToysPaths.history)
             else { return NetworkHistory() }
             if value.migrateLegacySSIDs(currentNetwork: status()?.network) {
                 try JSONEncoder().encode(value).write(to: NetToysPaths.history, options: .atomic)
@@ -1365,7 +1378,7 @@ public nonisolated enum NetToysConfigurationStore {
 
     static func appendHistory(_ event: NetworkTransitionEvent) throws {
         try NetToysStoreTransaction.withLock(at: NetToysPaths.directory) {
-            var history = (try? JSONDecoder().decode(NetworkHistory.self, from: Data(contentsOf: NetToysPaths.history)))
+            var history = try NetToysStoreFiles.decodeOrSetAside(NetworkHistory.self, from: NetToysPaths.history)
                 ?? NetworkHistory()
             history.append(event)
             try JSONEncoder().encode(history).write(to: NetToysPaths.history, options: .atomic)

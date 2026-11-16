@@ -161,6 +161,17 @@ final class NetToysGuardrailTests: XCTestCase {
         XCTAssertTrue(preparer.prepared.contains(anchor.id))
     }
 
+    func testDamagedScanArchiveIsKeptAsideNotReplaced() throws {
+        let url = paths.data.appendingPathComponent("scan-history.json")
+        try FileManager.default.createDirectory(at: paths.data, withIntermediateDirectories: true)
+        try Data("{not json".utf8).write(to: url)
+        try NetToysScannerStore.record(NetToysScanRun(target: "192.168.1.0/24", ports: [22], duration: 1, results: []), to: url)
+        let names = try FileManager.default.contentsOfDirectory(atPath: paths.data.path)
+        let aside = try XCTUnwrap(names.first { $0.contains(".damaged-") })
+        XCTAssertEqual(try Data(contentsOf: paths.data.appendingPathComponent(aside)), Data("{not json".utf8))
+        XCTAssertEqual(try JSONDecoder().decode(NetToysScanArchive.self, from: Data(contentsOf: url)).runs.count, 1)
+    }
+
     func testWiFiSwitchWaitsAfterWakeRestsAfterSwitchAndIgnoresLeaving() {
         var monitor = WiFiFailoverMonitor()
         // Outage on the joined network for 30 s: switch.
