@@ -1,7 +1,8 @@
 # Product scope
 
-Owner decisions of 2026-11-16. Visual polish, motion, and the menu bar
-panel details are still open (redesign in progress).
+Owner decisions of 2026-11-16. The design is settled. Reference renders:
+https://claude.ai/artifact/7XBPPhNa35523DhRbpbxvN (older rounds in its
+version history).
 
 ## Concept
 
@@ -25,10 +26,13 @@ panel details are still open (redesign in progress).
   Copy IP Address) and a "..." menu (Add to SSH Anchor, Copy MAC Address,
   Forget Device). Sections: Details, Open ports (watch switches),
   Latency (average first, 24 hours), Alerts, Comment.
-- Panel header: no status dot anywhere (owner dislikes it). The state
-  shows either as a tinted state button (green, amber, gray paused, red
-  with "!" that opens failure details) or as a state row in the action
-  list (choice open).
+- Panel header: no status dot and no pause button. The headline and the
+  subtitle (network, IP, latency) only.
+- System row, below Copy IP Address, in the same row style. The icon well
+  tint carries the state; the whole row does its trailing blue action:
+  Running "System Up · Pause", Warning "System Up, 1 Warning · Details",
+  Paused "System Paused · Resume", Failed "System Failed · Details".
+  Details opens the app window on the failure.
 - Panel bottom: Wi-Fi-menu-style rows with round icon wells. "Run Speed
   Test" runs inside its row (progress ring, live "Download 286 Mbps",
   Stop); when idle it shows the last result, such as "Last 412 Mbps".
