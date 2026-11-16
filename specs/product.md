@@ -1,7 +1,18 @@
 # Product scope
 
-Owner decisions of 2026-11-16. The concept, window layout, and menu bar
-panel are still open (redesign in progress).
+Owner decisions of 2026-11-16. Visual polish, motion, and the menu bar
+panel details are still open (redesign in progress).
+
+## Concept
+
+- Device inventory: the home is All Devices, a table of every device on
+  the network. Sidebar groups: Devices (All devices, Favorites, Offline)
+  and Tools (SSH Anchor, Wi-Fi Priority, History). No "Kinds" group, and
+  no "New" sidebar item or in-window new-device banner; new devices are
+  announced by a macOS notification only.
+- Main window: sidebar, with an inspector that opens on demand.
+- Menu bar panel: "Status and actions" (network header, latency graph,
+  status rows, action buttons, Pause all actions).
 
 ## Features
 
