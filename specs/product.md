@@ -64,15 +64,23 @@ version history).
 
 Renders: https://claude.ai/artifact/JtbRQVx3AjXGnEv93ZYrpK
 
-- Features: the full set of 29 tools, no free or Pro split. Diagnose
-  (ping, traceroute + MTR + visual traceroute as one tool, DNS lookup, DNS
-  propagation, whois, port scan, SSL check, subnet calculator, GeoIP, path
-  check, internet check, HTTP check), Monitor (network monitor, uptime
-  monitor with SSL expiry and latency thresholds, speed test history with
-  schedule and ISP report), Local network (LAN scanner, network guard,
-  Bonjour browser, ARP table, Wake-on-LAN, SSH Anchor), Wi-Fi (analyzer,
-  priority). macOS blocks SYN scan, OS guess, packet capture, channel load,
-  and traffic per app; those are out.
+- Features: the full set of 29 tools, no free or Pro split, in four
+  sidebar groups:
+  - Diagnose: Ping, Traceroute (with MTR and a map), DNS Lookup, DNS
+    Propagation (16 public resolvers), Whois, Port Scan (TCP connect), SSL
+    Certificate, HTTP Check, GeoIP, Path MTU, Internet Check, Subnet
+    Calculator.
+  - Monitor: Uptime Monitor (schedule, down alerts, latency thresholds,
+    SSL expiry), Speed Test (history, schedule, ISP report), Network
+    Monitor (traffic per interface), Network Guard, History.
+  - Local Network: All Devices, Bonjour Browser, Wake-on-LAN, ARP Table,
+    MAC Vendor, My Connection (public IP, interfaces, router, DNS), IPv6
+    Check, Clock Check (NTP offset), SSH Anchor.
+  - Wi-Fi: Wi-Fi Analyzer (channels, best channel), Wi-Fi Signal, Wi-Fi
+    Priority.
+  macOS blocks SYN scan, OS guess, packet capture, channel load, and
+  traffic per app; those are out. Renderer source of the settled design:
+  `/Volumes/External1TB/data/_custom/claude/nettoys/design-ref/src/`.
 - Sidebar: search field at top, then Pinned (tools only, drag to reorder;
   hidden when nothing is pinned), then the tool groups. No Recent section
   and no history entries (hosts, domains) in the sidebar. A pinned tool
