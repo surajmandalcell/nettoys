@@ -143,7 +143,13 @@ public actor NetToysHelperRuntime {
 
     public func run() async {
         let heartbeat = Task { await heartbeatLoop() }
-        defer { heartbeat.cancel() }
+        // Uptime checks and scheduled speed tests run with monitoring, in the app, while the Mac is awake.
+        let tools = Task { [paths, notify] in
+            async let uptime: Void = NetToysUptimeMonitor.shared.run(paths: paths, notify: notify)
+            async let speed: Void = NetToysSpeedSchedule.runLoop(paths: paths, notify: notify)
+            _ = await (uptime, speed)
+        }
+        defer { heartbeat.cancel(); tools.cancel() }
         SSHConfigFileUpdater.removeStaleTemporaryFiles(configURL: paths.sshConfig)
         saveStatus([])
         while !Task.isCancelled {
