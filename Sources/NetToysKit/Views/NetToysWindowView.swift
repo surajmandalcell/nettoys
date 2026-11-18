@@ -299,6 +299,16 @@ public struct NetToysWindowView: View {
         case "ssh-anchor": NetToysAnchorView(host: host).buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
         case "history": NetToysHistoryView(host: host).buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
         case "wifi-priority": NetToysWiFiPriorityView().buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
+        case "dns-lookup": NetToysDNSLookupView(tool: tool, input: shell.diagnoseField(tool))
+        case "dns-propagation": NetToysDNSPropagationView(tool: tool, input: shell.diagnoseField(tool))
+        case "whois": NetToysWhoisView(tool: tool, input: shell.diagnoseField(tool))
+        case "port-scan": NetToysPortScanView(tool: tool, input: shell.diagnoseField(tool))
+        case "ssl-certificate": NetToysSSLView(tool: tool, input: shell.diagnoseField(tool))
+        case "http-check": NetToysHTTPCheckView(tool: tool, input: shell.diagnoseField(tool))
+        case "geoip": NetToysGeoIPView(tool: tool, input: shell.diagnoseField(tool))
+        case "path-mtu": NetToysPathMTUView(tool: tool, input: shell.diagnoseField(tool))
+        case "internet-check": NetToysInternetCheckView(tool: tool, input: shell.diagnoseField(tool))
+        case "subnet-calculator": NetToysSubnetView(tool: tool, input: shell.diagnoseField(tool))
         default:
             NetToysToolPage(placeholder: tool, input: Binding(get: { shell.inputs[tool.id] ?? "" },
                                                               set: { shell.inputs[tool.id] = $0 }))
