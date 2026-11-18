@@ -62,7 +62,8 @@ struct NetToysApp: App {
             .task {
                 guard delegate.reopen == nil else { return } // first appearance only
                 delegate.reopen = openMainWindow
-                if !delegate.launchedAtLogin { openMainWindow() }
+                // No activate here: a normal launch is already front, and `open -g` must stay in the background.
+                if !delegate.launchedAtLogin { openWindow(id: "nettoys") }
                 if enabled { enabled = await host.loginItems.setEnabled(true) }
             }
         }

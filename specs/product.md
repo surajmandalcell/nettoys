@@ -15,7 +15,7 @@ version history).
 - Panel layout: "Headline with auto-join". During an outage it shows
   "Joining <next network> in 45 sec" with Join Now and Stay on <current>.
   Action buttons: Run Speed Test and Copy IP Address only.
-- Device modal: a centered, tall single column (about 440 pt) over the
+- Device modal: a centered, tall single column (about 480 pt) over the
   blurred, dimmed window. Header: name in SF Pro Display 20 pt semibold
   with a star, one status line (status, IP, vendor), a small close button.
   Actions: a row of small capsule push buttons (Wake Device, Open SSH,
