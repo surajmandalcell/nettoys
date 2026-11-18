@@ -173,60 +173,19 @@ nonisolated struct TCPPortProbeResult: Equatable, Sendable {
 }
 
 nonisolated enum TCPPortProbe {
+    /// The Port Scan connect: nonblocking and watched by a dispatch source, so no thread waits per probe and
+    /// the scanner's adaptive width (64 to 256) is the real number in flight. `host` must be an IPv4 literal.
     static func check(host: String, port: UInt16, timeoutMilliseconds: Int) async -> TCPPortProbeResult {
-        await Task.detached(priority: .userInitiated) {
-            checkSynchronously(host: host, port: port, timeoutMilliseconds: timeoutMilliseconds)
-        }.value
-    }
-
-    private static func checkSynchronously(
-        host: String,
-        port: UInt16,
-        timeoutMilliseconds: Int
-    ) -> TCPPortProbeResult {
-        let started = DispatchTime.now().uptimeNanoseconds
-        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { return result(.unreachable, started: started) }
-        defer { close(descriptor) }
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else {
-            return result(.unreachable, started: started)
+        guard let address = IPv4Address(host) else {
+            return TCPPortProbeResult(state: .unreachable, latencyMilliseconds: 0)
         }
-        let flags = fcntl(descriptor, F_GETFL, 0)
-        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
-            return result(.unreachable, started: started)
+        let result = await NetToysPortScan.connect(address, port: port, timeoutMilliseconds: timeoutMilliseconds)
+        let state: TCPPortState = switch result.state {
+        case .open: .open
+        case .closed: .closed
+        case .filtered: .unreachable
         }
-        let connectResult = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        if connectResult == 0 { return result(.open, started: started) }
-        if errno == ECONNREFUSED { return result(.closed, started: started) }
-        guard errno == EINPROGRESS else { return result(.unreachable, started: started) }
-
-        var item = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
-        let pollResult = Darwin.poll(&item, 1, Int32(max(1, timeoutMilliseconds)))
-        guard pollResult > 0 else { return result(.unreachable, started: started) }
-        var socketError: Int32 = 0
-        var length = socklen_t(MemoryLayout<Int32>.size)
-        guard getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &socketError, &length) == 0 else {
-            return result(.unreachable, started: started)
-        }
-        switch socketError {
-        case 0: return result(.open, started: started)
-        case ECONNREFUSED: return result(.closed, started: started)
-        default: return result(.unreachable, started: started)
-        }
-    }
-
-    private static func result(_ state: TCPPortState, started: UInt64) -> TCPPortProbeResult {
-        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
-        return TCPPortProbeResult(state: state, latencyMilliseconds: elapsed)
+        return TCPPortProbeResult(state: state, latencyMilliseconds: result.milliseconds)
     }
 }
 

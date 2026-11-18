@@ -129,6 +129,24 @@ final class DiagnoseTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(stats.jitter), 7.5, accuracy: 1e-9)
     }
 
+    /// macOS loops 127.0.0.2 back but does not own it, so a connect there waits for the timeout without
+    /// leaving the Mac. 200 such probes at 300 ms finish in about one timeout only when they all wait at once,
+    /// not one per cooperative thread.
+    func testPortProbesWaitInParallelWithoutBlockingThreads() async {
+        let started = ContinuousClock.now
+        let states = await withTaskGroup(of: TCPPortState.self) { group in
+            for index in 0..<200 {
+                group.addTask {
+                    await TCPPortProbe.check(host: "127.0.0.2", port: UInt16(20_000 + index), timeoutMilliseconds: 300).state
+                }
+            }
+            return await group.reduce(into: [TCPPortState]()) { $0.append($1) }
+        }
+        let elapsed = started.duration(to: .now)
+        XCTAssertGreaterThan(states.filter { $0 == .unreachable }.count, 150, "most probes waited for the timeout")
+        XCTAssertLessThan(elapsed, .milliseconds(1_500), "200 waits overlapped")
+    }
+
     func testTimeExceededMatchesTheQuotedRequest() throws {
         let router: [UInt8] = [10, 0, 0, 1]
         let target: UInt32 = 0x0101_0101
