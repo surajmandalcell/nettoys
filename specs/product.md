@@ -73,11 +73,18 @@ Renders: https://claude.ai/artifact/JtbRQVx3AjXGnEv93ZYrpK
   Bonjour browser, ARP table, Wake-on-LAN, SSH Anchor), Wi-Fi (analyzer,
   priority). macOS blocks SYN scan, OS guess, packet capture, channel load,
   and traffic per app; those are out.
-- Sidebar: search field at top, then Pinned (drag to reorder; hidden when
-  nothing is pinned), then Recent (a setting turns it off), then groups.
+- Sidebar: search field at top, then Pinned (tools only, drag to reorder;
+  hidden when nothing is pinned), then the tool groups. No Recent section
+  and no history entries (hosts, domains) in the sidebar. A pinned tool
+  is not repeated elsewhere.
+- Sidebar look: inspired by Mail (option 8 of round 12): Dense pro, glass
+  sidebar, monochrome symbols.
 - Command palette: both ⌘K in the window and ⌥Space from any app, plus a
-  Raycast extension. Compact rows, monochrome icons. Look still open.
-- Look: Dense pro with a glass sidebar and monochrome sidebar icons. The
-  sidebar style is still open.
-- Motion: snappy spring (response 0.30 s, damping 0.86) everywhere.
-- Tool page: path diagram on top of the hop table. Long paths still open.
+  Raycast extension. Look: Xcode Open Quickly style, compact rows,
+  monochrome symbols.
+- Motion: snappy spring (response 0.30 s, damping 0.86) everywhere. Every
+  expand and collapse in the app animates with it.
+- Tool page: path diagram on top of the hop table. Long paths fold quiet
+  hops into one "+N" stop; a click opens the full path wrapped into rows
+  (a snake with rounded bends), with a control to fold it again. Icons
+  and the diagram look still get a premium pass.
