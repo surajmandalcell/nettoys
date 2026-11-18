@@ -278,12 +278,22 @@ public struct NetToysWindowView: View {
         .padding(.horizontal, 8)
     }
 
+    /// The OnePlus pages reload from disk on each visit, so they rebuild instead of staying mounted.
+    static func keepsAlive(_ id: String) -> Bool { NetToysTool.tool(id) != nil && !["ssh-anchor", "history", "wifi-priority"].contains(id) }
+
     @ViewBuilder
     private var content: some View {
-        if let tool = NetToysTool.tool(shell.selection) {
-            toolView(tool)
-        } else {
-            legacyPage.buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
+        ZStack(alignment: .topLeading) {
+            NetToysKeptPages(selection: shell.selection, keeps: Self.keepsAlive) { id in
+                if let tool = NetToysTool.tool(id) { toolView(tool) }
+            }
+            if !Self.keepsAlive(shell.selection) {
+                if let tool = NetToysTool.tool(shell.selection) {
+                    toolView(tool)
+                } else {
+                    legacyPage.buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
+                }
+            }
         }
     }
 

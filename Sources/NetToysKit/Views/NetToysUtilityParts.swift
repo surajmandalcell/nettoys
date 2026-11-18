@@ -5,6 +5,36 @@ import SwiftUI
 // Shared parts of the Monitor, Local Network, and Wi-Fi tool pages: a dense result table and small texts.
 
 /// One table column. A nil width takes the rest of the row.
+extension EnvironmentValues {
+    /// False while a visited tool page stays mounted behind the selected one; live readers pause, their data stays.
+    @Entry var toolPageActive = true
+}
+
+/// Keeps every visited page mounted (hidden when not selected), so switching tools keeps results and running rows.
+/// Bounded: at most one page per tool id.
+struct NetToysKeptPages<Page: View>: View {
+    let selection: String
+    let keeps: (String) -> Bool
+    @ViewBuilder let page: (String) -> Page
+    @State private var visited: [String] = []
+
+    var body: some View {
+        // The new page joins `visited` in onChange; listing it here too draws it on the first frame.
+        let ids = keeps(selection) && !visited.contains(selection) ? visited + [selection] : visited
+        ZStack(alignment: .topLeading) {
+            ForEach(ids, id: \.self) { id in
+                let active = id == selection
+                page(id)
+                    .opacity(active ? 1 : 0).allowsHitTesting(active).accessibilityHidden(!active).disabled(!active)
+                    .environment(\.toolPageActive, active)
+            }
+        }
+        .onChange(of: selection, initial: true) { _, id in
+            if keeps(id), !visited.contains(id) { visited.append(id) }
+        }
+    }
+}
+
 struct UtilityColumn {
     let title: String
     var width: CGFloat?

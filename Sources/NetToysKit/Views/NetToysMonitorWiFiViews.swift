@@ -325,6 +325,7 @@ struct NetToysWiFiSignalView: View {
     @State private var running: Bool
     @State private var gate: NetToysLocationGate
     @State private var input = ""
+    @Environment(\.toolPageActive) private var active
 
     init(tool: NetToysTool, samples: [NetToysWiFiSignalSample]? = nil, location: CLAuthorizationStatus? = nil) {
         self.tool = tool
@@ -377,8 +378,9 @@ struct NetToysWiFiSignalView: View {
                 Text(row.note).foregroundStyle(Dense.secondary).cell(pairColumnsSignal[2])
             }
         }
-        .task(id: running) {
-            guard live, running else { return }
+        // Reading the radio pauses while the page is hidden; the samples stay.
+        .task(id: running && active) {
+            guard live, running, active else { return }
             for await sample in NetToysWiFiSignal.live() {
                 connected = sample != nil
                 guard let sample else { continue }
