@@ -56,11 +56,11 @@ struct NetToysSidebar<Footer: View>: View {
             // Rows fade out under Settings instead of meeting a hard edge.
             .mask(VStack(spacing: 0) {
                 Color.black
-                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16)
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 24)
             })
-            row(id: "settings", title: "Settings", symbol: "gearshape").padding(.top, 4)
-            DenseHairline().padding(.horizontal, 12).padding(.vertical, 8)
-            footer.padding(.horizontal, 10).padding(.bottom, 12)
+            row(id: "settings", title: "Settings", symbol: "gearshape").padding(.top, 2)
+            DenseHairline().padding(.horizontal, 12).padding(.vertical, 6)
+            footer.padding(.horizontal, 10).padding(.bottom, 10)
         }
         .animation(Dense.spring(reduceMotion), value: shell.selection)
         .animation(Dense.spring(reduceMotion), value: shell.pinned)
@@ -159,7 +159,8 @@ struct NetToysSidebarGlass: NSViewRepresentable {
         let view = NSVisualEffectView()
         view.material = .sidebar
         view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
+        // Always active: an inactive window (a background capture, or another app in front) would flatten it to opaque gray.
+        view.state = .active
         return view
     }
 

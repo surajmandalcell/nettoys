@@ -274,6 +274,7 @@ final class NetToysScannerViewModel {
             total = results.count
         }
         isLoading = false
+        retireResultsFromOtherNetwork()
     }
 
     func clearRestoredResults() {
@@ -285,6 +286,7 @@ final class NetToysScannerViewModel {
         total = 0
         lastDuration = nil
         lastScanTarget = nil
+        resultsFromOtherNetwork = nil
     }
 
     var hasNoResponsiveHosts: Bool {
@@ -292,6 +294,7 @@ final class NetToysScannerViewModel {
     }
 
     var scanResultNotice: String? {
+        if !isScanning, let resultsFromOtherNetwork { return "Last scan was on \(resultsFromOtherNetwork). Scan this network." }
         guard !isScanning, !results.isEmpty, let lastScanTarget else { return nil }
         if lastScanTarget.trimmingCharacters(in: .whitespacesAndNewlines)
             != targetInput.trimmingCharacters(in: .whitespacesAndNewlines) {
@@ -308,7 +311,22 @@ final class NetToysScannerViewModel {
         defaults.set(true, forKey: Self.followsActiveNetworkKey)
     }
 
+    /// The network of the shown results when the Mac has moved to another network; nil when the results are current.
+    private(set) var resultsFromOtherNetwork: String?
+    private var activeNetwork: LocalIPv4Network?
+
+    /// Results with no address on the Mac's current subnet are history from another network, never live.
+    private func retireResultsFromOtherNetwork() {
+        guard let activeNetwork, !isScanning, !results.isEmpty, resultsFromOtherNetwork == nil,
+              !results.contains(where: { activeNetwork.contains($0.address.description) }) else { return }
+        resultsFromOtherNetwork = lastScanTarget ?? "another network"
+        for index in results.indices { results[index].isReachable = false }
+        refreshVisibleResults()
+    }
+
     func updateActiveNetwork(_ network: LocalIPv4Network) {
+        activeNetwork = network
+        retireResultsFromOtherNetwork()
         guard targetFollowsActiveNetwork else { return }
         useActiveNetwork(network.cidr)
     }
@@ -486,6 +504,7 @@ final class NetToysScannerViewModel {
                     }
                     lastDuration = nil
                     lastScanTarget = nil
+                    resultsFromOtherNetwork = nil
                     total = targets.count
                     let values = await scanner.scan(
                         targets: targets,

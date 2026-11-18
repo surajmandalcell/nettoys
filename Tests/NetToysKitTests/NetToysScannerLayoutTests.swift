@@ -222,6 +222,26 @@ final class NetToysScannerLayoutTests: XCTestCase {
                        "A device that answered once stays listed as offline")
     }
 
+    func testScanFromAnotherNetworkNeverShowsLive() throws {
+        let suite = "NetToysScannerLayoutTests.network.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let router = NetToysScanResult(address: try XCTUnwrap(IPv4Address("192.168.1.1")), isReachable: true,
+                                       responseMilliseconds: 4, hostname: "rtr", macAddress: nil, vendor: nil, openPorts: [80])
+        let archive = NetToysScanArchive(runs: [NetToysScanRun(target: "192.168.1.0/24", ports: [80], duration: 1, results: [router])])
+        let home = NetToysScannerViewModel(archive: archive, defaults: defaults, host: testHost(defaults))
+        home.updateActiveNetwork(try XCTUnwrap(LocalIPv4Network(interfaceName: "en0", address: "192.168.1.10", netmask: "255.255.255.0")))
+        XCTAssertTrue(home.results[0].isReachable)
+        XCTAssertNil(home.resultsFromOtherNetwork)
+
+        let moved = NetToysScannerViewModel(archive: archive, defaults: defaults, host: testHost(defaults))
+        moved.updateActiveNetwork(try XCTUnwrap(LocalIPv4Network(interfaceName: "en0", address: "192.168.0.20", netmask: "255.255.255.0")))
+        XCTAssertFalse(moved.results[0].isReachable)
+        XCTAssertEqual(moved.resultsFromOtherNetwork, "192.168.1.0/24")
+        XCTAssertEqual(NetToysDeviceText.ping(moved.results[0]), "None")
+        XCTAssertEqual(moved.scanResultNotice, "Last scan was on 192.168.1.0/24. Scan this network.")
+    }
+
     private func testHost(_ defaults: UserDefaults) -> NetToysHost {
         NetToysHost(id: .standalone, requestsPermissions: false, defaults: defaults, scannerDefaults: defaults)
     }

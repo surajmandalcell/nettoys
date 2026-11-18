@@ -176,7 +176,8 @@ struct NetToysDevicesView: View {
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 0) {
                 Text(scope.rawValue).font(.system(size: 15, weight: .semibold)).foregroundStyle(Dense.label)
-                Text("\(known.count) on \(networkName ?? "this network"), \(offline) offline")
+                Text(model.resultsFromOtherNetwork.map { "Last scan was on \($0), \(known.count) devices. Scan this network." }
+                     ?? "\(known.count) on \(networkName ?? "this network"), \(offline) offline")
                     .font(.system(size: 11)).foregroundStyle(Dense.secondary).monospacedDigit().lineLimit(1)
             }
             Spacer(minLength: 12)

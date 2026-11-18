@@ -35,7 +35,11 @@ public struct NetToysTraySnapshot: Sendable {
             let runs = NetToysScannerStore.archive().runs
             if let latest = runs.last {
                 let seen = Set(runs.flatMap { $0.results.filter(\.isReachable).map(\.id) })
-                let up = Set(latest.results.filter(\.isReachable).map(\.id))
+                // A scan from another network is history: none of its devices count as up here.
+                let here = LocalIPv4Network.active().map { network in
+                    latest.results.contains { network.contains($0.address.description) }
+                } ?? true
+                let up = here ? Set(latest.results.filter(\.isReachable).map(\.id)) : []
                 snapshot.deviceCount = seen.count
                 snapshot.offlineDeviceCount = seen.subtracting(up).count
             }

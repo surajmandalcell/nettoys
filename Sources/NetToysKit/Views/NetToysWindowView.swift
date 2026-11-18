@@ -258,8 +258,11 @@ public struct NetToysWindowView: View {
                 Text(safeMode ? "Safe mode is on" : pausedAll ? "All actions paused" : "Pause all actions")
                     .font(.system(size: 12, weight: pausedAll ? .medium : .regular))
                     .foregroundStyle(pausedAll ? Dense.amber : Dense.label)
-                Text(pausedAll ? "Click play to resume" : configuration.dryRun ? "Dry run: nothing changes" : "Actions run normally")
-                    .font(.system(size: 11)).foregroundStyle(Dense.tertiary)
+                // The normal state needs no second line; it shows only when something is unusual.
+                if pausedAll || configuration.dryRun {
+                    Text(pausedAll ? "Click play to resume" : "Dry run: nothing changes")
+                        .font(.system(size: 11)).foregroundStyle(Dense.tertiary)
+                }
             }
             .help(configuration.safeModeReason ?? "")
             Spacer(minLength: 0)
@@ -269,7 +272,7 @@ public struct NetToysWindowView: View {
                 Image(systemName: pausedAll ? "play.fill" : "pause.fill")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(pausedAll ? Color.white : Dense.label)
-                    .frame(width: 26, height: 26)
+                    .frame(width: 22, height: 22)
                     .background(Circle().fill(pausedAll ? Dense.accent : Dense.field))
             }
             .buttonStyle(.plain)
