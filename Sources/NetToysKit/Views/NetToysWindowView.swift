@@ -157,6 +157,7 @@ public struct NetToysWindowView: View {
                 NetToysSidebar(shell: shell, deviceCount: knownDevices.count) { pauseRow }
                 content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
                     .background(Dense.content)
+                    .environment(shell)
             }
             .background(NetToysTrafficLights())
             .blur(radius: openDevice == nil || reduceMotion ? 0 : 6)
@@ -299,6 +300,8 @@ public struct NetToysWindowView: View {
         case "ssh-anchor": NetToysAnchorView(host: host).buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
         case "history": NetToysHistoryView(host: host).buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
         case "wifi-priority": NetToysWiFiPriorityView().buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
+        case "ping": NetToysPingView(tool: tool, input: Binding(get: { shell.inputs[tool.id] ?? "" }, set: { shell.inputs[tool.id] = $0 }))
+        case "traceroute": NetToysTraceView(tool: tool, input: Binding(get: { shell.inputs[tool.id] ?? "" }, set: { shell.inputs[tool.id] = $0 }))
         case "dns-lookup": NetToysDNSLookupView(tool: tool, input: shell.diagnoseField(tool))
         case "dns-propagation": NetToysDNSPropagationView(tool: tool, input: shell.diagnoseField(tool))
         case "whois": NetToysWhoisView(tool: tool, input: shell.diagnoseField(tool))

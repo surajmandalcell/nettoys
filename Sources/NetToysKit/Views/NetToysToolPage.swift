@@ -10,6 +10,11 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
     var run: (() -> Void)?
     @ViewBuilder var summary: Summary
     @ViewBuilder var results: Results
+    @Environment(NetToysShell.self) private var shell: NetToysShell?
+
+    private var hasInput: Bool { tool.input == nil || !input.trimmingCharacters(in: .whitespaces).isEmpty }
+    /// Run is the normal prominent button whenever it can act: a valid input, or Stop while running.
+    private var canRun: Bool { run != nil && (running || hasInput) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,6 +27,13 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // nettoys://tool/<id>?host= and palette actions fill the input and run once.
+        .onChange(of: shell?.pendingRun, initial: true) { _, id in
+            guard id == tool.id, let shell, let run, hasInput else { return }
+            shell.pendingRun = nil
+            if running { run() } // stop the old host first
+            run()
+        }
     }
 
     // Light to heavy: title, input field, Run.
@@ -37,7 +49,7 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
                 HStack(spacing: 6) {
                     Image(systemName: "scope").font(.system(size: 12, weight: .medium)).foregroundStyle(Dense.secondary)
                     TextField(prompt, text: $input).textFieldStyle(.plain).font(.system(size: 13))
-                        .onSubmit { if !running { run?() } }
+                        .onSubmit { if !running && hasInput { run?() } }
                         .accessibilityLabel(prompt)
                 }
                 .padding(.horizontal, 10).frame(width: 300, height: 28)
@@ -49,8 +61,8 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
                 Label(running ? "Stop" : "Run", systemImage: running ? "stop.fill" : "play.fill")
             }
             .buttonStyle(DenseCapsuleButtonStyle(prominent: true))
-            .disabled(run == nil)
-            .help(run == nil ? "Coming in this build" : "")
+            .disabled(!canRun)
+            .help(run == nil ? "Coming in this build" : hasInput ? "" : "Enter \(tool.input?.lowercased() ?? "an input")")
         }
         .padding(.leading, 20).padding(.trailing, 14)
         .frame(height: 52) // centerline 26 pt, shared with the traffic lights

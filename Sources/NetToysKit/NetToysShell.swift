@@ -13,6 +13,8 @@ public final class NetToysShell {
     public var selection: String { didSet { defaults.set(selection, forKey: Self.selectionKey) } }
     /// Toolbar input per tool id, filled by routes and palette actions.
     public var inputs: [String: String] = [:]
+    /// A tool that routes or the palette opened with an input; its page runs once and clears this.
+    public var pendingRun: String?
     public private(set) var pinned: [String]
     public var paletteVisible = false
     /// Known devices for the palette; the window keeps it current.
@@ -30,6 +32,7 @@ public final class NetToysShell {
 
     public func open(_ id: String, input: String? = nil) {
         if let input { inputs[id] = input }
+        pendingRun = input == nil ? nil : id
         selection = id
     }
 
