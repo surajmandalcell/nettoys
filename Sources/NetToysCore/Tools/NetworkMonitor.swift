@@ -55,7 +55,8 @@ public nonisolated enum NetToysTrafficMonitor {
     static func counters() -> [String: (UInt32, UInt32)] {
         InterfaceAddresses.all(withMAC: false).reduce(into: [:]) { result, item in
             let (name, entry) = item
-            guard entry.isUp, name != "lo0", entry.bytesIn > 0 || entry.bytesOut > 0 else { return }
+            guard entry.isUp, name != "lo0", !name.hasPrefix("awdl"), !name.hasPrefix("llw"),
+                  entry.bytesIn > 0 || entry.bytesOut > 0 else { return }
             result[name] = (entry.bytesIn, entry.bytesOut)
         }
     }

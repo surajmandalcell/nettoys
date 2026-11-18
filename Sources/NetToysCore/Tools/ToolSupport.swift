@@ -58,12 +58,15 @@ nonisolated enum ToolHTTP {
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Public IP and network owner from Cloudflare's speed test meta endpoint (no key).
+    /// Public IP and network owner from ipinfo.io (no key; "org" reads "AS45804 MEGHBELA BROADBAND").
     static func ispName() async -> (ip: String?, isp: String?) {
-        guard let text = await text("https://speed.cloudflare.com/meta"),
+        guard let text = await text("https://ipinfo.io/json"),
               let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
         else { return (nil, nil) }
-        return (object["clientIp"] as? String, object["asOrganization"] as? String)
+        let org = (object["org"] as? String).map { org in
+            org.hasPrefix("AS") ? String(org.drop { $0 != " " }.dropFirst()) : org
+        }
+        return (object["ip"] as? String, org)
     }
 }
 
@@ -108,7 +111,8 @@ public nonisolated struct ToolProbeError: Error, Equatable, Sendable, CustomStri
         switch error {
         case .posix(let code) where code == .ECONNREFUSED: description = "Connection refused"
         case .posix(let code) where code == .ETIMEDOUT: description = "Timed out"
-        case .posix(let code) where code == .ENETUNREACH || code == .EHOSTUNREACH: description = "No route to host"
+        case .posix(let code) where code == .ENETUNREACH || code == .EHOSTUNREACH || code == .ENETDOWN:
+            description = "No route to host"
         case .dns: description = "Name not found"
         default: description = error.localizedDescription
         }

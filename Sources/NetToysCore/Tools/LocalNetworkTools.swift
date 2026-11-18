@@ -73,7 +73,7 @@ public nonisolated struct NetToysConnectionInfo: Equatable, Sendable {
 }
 
 public nonisolated enum NetToysMyConnection {
-    /// Public addresses come from api4/api6.ipify.org and the ISP from speed.cloudflare.com/meta (no keys).
+    /// Public addresses come from api4/api6.ipify.org and the ISP from ipinfo.io (no keys).
     public static func load() async -> NetToysConnectionInfo {
         async let ipv4 = ToolHTTP.text("https://api4.ipify.org")
         async let ipv6 = ToolHTTP.text("https://api6.ipify.org")
@@ -121,7 +121,7 @@ public nonisolated struct NetToysIPv6Check: Equatable, Sendable {
     /// TCP connect time to Cloudflare's 2606:4700:4700::1111 port 443.
     public let reachMilliseconds: Double?
     public let reachFailure: String?
-    /// AAAA answers for apple.com from the system resolver.
+    /// AAAA answers for apple.com from the network's DNS server.
     public let aaaaAddresses: [String]
 
     public var isWorking: Bool { globalAddress != nil && reachMilliseconds != nil && !aaaaAddresses.isEmpty }
@@ -137,23 +137,47 @@ public nonisolated enum NetToysIPv6 {
                                       reachFailure: result.failureDescription, aaaaAddresses: aaaa)
     }
 
+    /// Asks the first resolver in /etc/resolv.conf directly over UDP: the system resolver skips AAAA
+    /// queries on a network without IPv6, which would hide whether DNS can answer them.
     private static func lookupAAAA(_ name: String) -> [String] {
-        var hints = addrinfo()
-        hints.ai_family = AF_INET6
-        hints.ai_socktype = SOCK_STREAM
-        var list: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(name, nil, &hints, &list) == 0, let first = list else { return [] }
-        defer { freeaddrinfo(list) }
+        guard let text = try? String(contentsOfFile: "/etc/resolv.conf", encoding: .utf8),
+              let server = DNSProbe.resolver(resolvConf: text) else { return [] }
+        let id = UInt16.random(in: 1...UInt16.max)
+        guard let reply = HostResolver.exchange(HostResolver.query(name: name, type: 28, id: id), server: server,
+                                                timeoutMilliseconds: 3_000) else { return [] }
+        return aaaaAnswers(in: reply, id: id)
+    }
+
+    /// The IPv6 addresses in the answer section of a DNS reply to `id`.
+    static func aaaaAnswers(in message: [UInt8], id: UInt16) -> [String] {
+        guard message.count >= 12, UInt16(message[0]) << 8 | UInt16(message[1]) == id, message[3] & 0x0F == 0
+        else { return [] }
+        let questions = Int(message[4]) << 8 | Int(message[5]), answers = Int(message[6]) << 8 | Int(message[7])
+        var offset = 12
+        func skipName() -> Bool {
+            while offset < message.count {
+                let length = message[offset]
+                if length & 0xC0 == 0xC0 { offset += 2; return offset <= message.count }
+                offset += 1 + Int(length)
+                if length == 0 { return offset <= message.count }
+            }
+            return false
+        }
+        for _ in 0..<questions { guard skipName() else { return [] }; offset += 4 }
         var result: [String] = []
-        var current: UnsafeMutablePointer<addrinfo>? = first
-        while let item = current {
-            defer { current = item.pointee.ai_next }
-            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            guard let address = item.pointee.ai_addr,
-                  getnameinfo(address, item.pointee.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0
-            else { continue }
-            let text = String(cString: buffer)
-            if !text.hasPrefix("::ffff:"), !result.contains(text) { result.append(text) }
+        for _ in 0..<answers {
+            guard skipName(), offset + 10 <= message.count else { break }
+            let type = Int(message[offset]) << 8 | Int(message[offset + 1])
+            let length = Int(message[offset + 8]) << 8 | Int(message[offset + 9])
+            offset += 10
+            guard offset + length <= message.count else { break }
+            if type == 28, length == 16 {
+                var address = in6_addr()
+                withUnsafeMutableBytes(of: &address) { $0.copyBytes(from: message[offset..<(offset + 16)]) }
+                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                if inet_ntop(AF_INET6, &address, &buffer, socklen_t(buffer.count)) != nil { result.append(String(cString: buffer)) }
+            }
+            offset += length
         }
         return result
     }
