@@ -126,7 +126,7 @@ struct NetToysDevicesView: View {
                 VStack(spacing: 0) {
                     NetToysDeviceTable(model: model, rows: rows, width: tableWidth, openDevice: openDevice,
                                        contextMenu: { contextMenu(for: $0) })
-                        .animation(reduceMotion ? nil : .snappy(duration: 0.18), value: rows.map(\.id))
+                        .animation(reduceMotion ? nil : Dense.spring, value: rows.map(\.id))
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tableWidth = $0 }
                         .overlay { emptyState(rows) }
                     statusBar
@@ -180,7 +180,7 @@ struct NetToysDevicesView: View {
             }
             Spacer(minLength: 12)
             Button {
-                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { showInspector.toggle() }
+                withAnimation(Dense.spring(reduceMotion)) { showInspector.toggle() }
             } label: {
                 Image(systemName: "sidebar.trailing").font(.system(size: 13, weight: .regular))
                     .foregroundStyle(showInspector ? Dense.label : Dense.secondary)

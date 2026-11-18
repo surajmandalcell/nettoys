@@ -116,7 +116,7 @@ public enum NetToysPage: String, CaseIterable, Identifiable, Sendable {
 
 public struct NetToysWindowView: View {
     private let host: NetToysHost
-    @Binding private var page: NetToysPage
+    @Bindable private var shell: NetToysShell
     @Binding private var enabled: Bool
     private let isTransitioning: Bool
     private let consumePrefill: () -> NetToysScanPrefill?
@@ -124,26 +124,25 @@ public struct NetToysWindowView: View {
     @State private var scannerModel: NetToysScannerViewModel
     @State private var localNetworkAccess: NetToysLocalNetworkAccess
     @State private var openDevice: String?
-    @AppStorage("nettoys.devices.scope") private var deviceScope = NetToysDeviceScope.all
     @State private var configuration: NetToysConfiguration
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Pause or safe mode: every automatic action is held.
     private var pausedAll: Bool { configuration.actionsPaused || configuration.safeModeReason != nil }
 
-    public init(host: NetToysHost, page: Binding<NetToysPage>, enabled: Binding<Bool>,
+    public init(host: NetToysHost, shell: NetToysShell, enabled: Binding<Bool>,
                 isTransitioning: Bool = false, consumePrefill: @escaping () -> NetToysScanPrefill? = { nil }) {
-        self.init(host: host, page: page, enabled: enabled, isTransitioning: isTransitioning,
+        self.init(host: host, shell: shell, enabled: enabled, isTransitioning: isTransitioning,
                   consumePrefill: consumePrefill, scannerModel: NetToysScannerViewModel(host: host))
     }
 
     /// Takes a prepared scanner model, so offscreen renders can use synthetic devices.
-    init(host: NetToysHost, page: Binding<NetToysPage>, enabled: Binding<Bool>, isTransitioning: Bool = false,
+    init(host: NetToysHost, shell: NetToysShell, enabled: Binding<Bool>, isTransitioning: Bool = false,
          consumePrefill: @escaping () -> NetToysScanPrefill? = { nil }, scannerModel: NetToysScannerViewModel,
          openDevice: String? = nil, configuration: NetToysConfiguration = NetToysConfiguration()) {
         _configuration = State(initialValue: configuration)
         self.host = host
-        _page = page
+        self.shell = shell
         _enabled = enabled
         self.isTransitioning = isTransitioning
         self.consumePrefill = consumePrefill
@@ -153,30 +152,55 @@ public struct NetToysWindowView: View {
     }
 
     public var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             HStack(spacing: 0) {
-                sidebar
+                NetToysSidebar(shell: shell, deviceCount: knownDevices.count) { pauseRow }
                 content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
+                    .background(Dense.content)
             }
-            .background(Dense.content)
+            .background(NetToysTrafficLights())
             .blur(radius: openDevice == nil || reduceMotion ? 0 : 6)
             if let openDevice {
                 modalDim.transition(.opacity).onTapGesture { self.openDevice = nil }
                 NetToysDeviceModal(model: scannerModel, id: openDevice, paused: pausedAll) { self.openDevice = nil }
                     .transition(.netToysModal(reduceMotion: reduceMotion))
             }
+            if shell.paletteVisible {
+                Color.clear.contentShape(Rectangle()).onTapGesture { shell.paletteVisible = false }
+                NetToysPaletteView(shell: shell) { _ in shell.paletteVisible = false }
+                    .shadow(color: .black.opacity(0.22), radius: 30, y: 16)
+                    .padding(.top, 90)
+                    .transition(.opacity.combined(with: .scale(scale: reduceMotion ? 1 : 0.98, anchor: .top)))
+            }
         }
         .animation(.easeOut(duration: openDevice == nil ? 0.1 : 0.18), value: openDevice)
+        .animation(Dense.spring(reduceMotion), value: shell.paletteVisible)
         .ignoresSafeArea()
         .frame(minWidth: 1100, idealWidth: 1280, maxWidth: .infinity, minHeight: 620, idealHeight: 820, maxHeight: .infinity)
         .onePlusDensity(.regular)
         .onePlusLiveUpdates()
         .onePlusFocusPolicy()
         .onePlusAppAppearance()
-        .background { Button("") { page = .settings }.keyboardShortcut(",").hidden() }
+        .background {
+            Group {
+                Button("") { shell.selection = "settings" }.keyboardShortcut(",")
+                Button("") { shell.paletteVisible.toggle() }.keyboardShortcut("k")
+                Button("") { shell.selection = "all-devices" }.keyboardShortcut("1")
+                Button("") { shell.selection = "ssh-anchor" }.keyboardShortcut("2")
+                Button("") { shell.selection = "wifi-priority" }.keyboardShortcut("3")
+                Button("") { shell.selection = "history" }.keyboardShortcut("4")
+            }
+            .hidden()
+        }
+        .onChange(of: scannerModel.results.count, initial: true) { shell.devices = knownDevices }
+        .onChange(of: shell.deviceRequest) { _, id in
+            guard let id else { return }
+            shell.deviceRequest = nil
+            openDevice = id
+        }
         .onReceive(NotificationCenter.default.publisher(for: .netToysRescanRun)) { notification in
             guard let run = notification.object as? NetToysScanRun else { return }
-            page = .scanner
+            shell.selection = "all-devices"
             Task { @MainActor in
                 await Task.yield()
                 NotificationCenter.default.post(name: .netToysStartScan, object: run)
@@ -184,11 +208,11 @@ public struct NetToysWindowView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .netToysPrefill)) { notification in
             scannerModel.applyPrefill(consumePrefill() ?? (notification.object as? NetToysScanPrefill))
-            page = .scanner
+            shell.selection = "all-devices"
         }
         .onReceive(NotificationCenter.default.publisher(for: .netToysOpenAnchor)) { notification in
             guard let prefill = notification.object as? NetToysAnchorPrefill else { return }
-            page = .anchor
+            shell.selection = "ssh-anchor"
             Task { @MainActor in
                 await Task.yield()
                 NotificationCenter.default.post(name: .netToysApplyAnchorPrefill, object: prefill)
@@ -196,7 +220,7 @@ public struct NetToysWindowView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .netToysOpenPage)) { notification in
             guard let requestedPage = notification.object as? NetToysPage else { return }
-            page = requestedPage
+            shell.selection = requestedPage.selectionID
         }
         .task {
             scannerModel.applyPrefill(consumePrefill())
@@ -223,67 +247,7 @@ public struct NetToysWindowView: View {
         Color(light: .init(white: 0, alpha: 0.16), dark: .init(white: 0, alpha: 0.4))
     }
 
-    // MARK: Sidebar: Devices and Tools groups, then Settings and the pause row.
-
-    private var sidebar: some View {
-        let known = scannerModel.devices(in: .all, from: scannerModel.results)
-        let favorites = known.filter { scannerModel.annotations[$0.id]?.isFavorite == true }.count
-        let offline = known.filter { !$0.isReachable }.count
-        let counts: [NetToysDeviceScope: Int] = [.all: known.count, .favorites: favorites, .offline: offline]
-        return VStack(alignment: .leading, spacing: 1) {
-            // The traffic lights sit in this row: 8 pt inset plus 18 pt puts their center 26 pt from the top.
-            Color.clear.frame(height: 36).background(NetToysTrafficLights())
-            sidebarCaption("Devices")
-            ForEach(NetToysDeviceScope.allCases) { scope in
-                sidebarRow(scope.rawValue, scope.icon, count: counts[scope], selected: page == .scanner && deviceScope == scope) {
-                    page = .scanner
-                    deviceScope = scope
-                }
-                .keyboardShortcut(scope == .all ? KeyboardShortcut("1") : nil)
-                .accessibilityIdentifier("nettoys.devices.\(scope)")
-            }
-            sidebarCaption("Tools")
-            ForEach([(NetToysPage.anchor, "SSH Anchor", "2"), (.wifiPriority, "Wi-Fi Priority", "3"), (.history, "History", "4")], id: \.0) { item in
-                sidebarRow(item.1, item.0.icon, selected: page == item.0) { page = item.0 }
-                    .keyboardShortcut(KeyEquivalent(Character(item.2)))
-                    .accessibilityIdentifier("nettoys.page.\(item.0.id)")
-            }
-            Spacer(minLength: 0)
-            sidebarRow("Settings", "gearshape", selected: page == .settings) { page = .settings }
-            DenseHairline().padding(.horizontal, 2).padding(.vertical, 8)
-            pauseRow.padding(.bottom, 12)
-        }
-        .padding(.horizontal, 8)
-        .frame(width: 232).frame(maxHeight: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Dense.sidebar)
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Dense.stroke, lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.06), radius: 6, y: 1)
-        )
-        .padding([.leading, .top, .bottom], 8)
-    }
-
-    private func sidebarCaption(_ title: String) -> some View {
-        Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(Dense.tertiary)
-            .padding(.horizontal, 10).padding(.top, 12).padding(.bottom, 4)
-    }
-
-    private func sidebarRow(_ title: String, _ symbol: String, count: Int? = nil, selected: Bool,
-                            action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(selected ? Dense.label : Dense.secondary).frame(width: 20)
-                Text(title).font(.system(size: 13, weight: selected ? .medium : .regular)).foregroundStyle(Dense.label)
-                Spacer(minLength: 0)
-                if let count { Text("\(count)").font(.system(size: 12)).foregroundStyle(Dense.tertiary).monospacedDigit() }
-            }
-            .padding(.horizontal, 8).frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(selected ? Dense.navSelection : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
+    private var knownDevices: [NetToysScanResult] { scannerModel.devices(in: .all, from: scannerModel.results) }
 
     /// Pause and Resume write the saved configuration; Resume also ends safe mode.
     private var pauseRow: some View {
@@ -310,36 +274,43 @@ public struct NetToysWindowView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(pausedAll ? "Resume all actions" : "Pause all actions")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
     }
 
     @ViewBuilder
     private var content: some View {
-        switch page {
-        case .scanner:
-            NetToysDevicesView(model: scannerModel, scope: deviceScope, paused: pausedAll,
-                               openDevice: { openDevice = $0 }) {
-                settingsSection = "scanner"
-                page = .settings
-            }
-        default:
+        if let tool = NetToysTool.tool(shell.selection) {
+            toolView(tool)
+        } else {
             legacyPage.buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
         }
     }
 
-    /// Tool pages keep their OnePlus layout inside the new shell.
+    /// One `case` per tool whose view has landed; every other tool shows the shared placeholder page.
+    @ViewBuilder
+    private func toolView(_ tool: NetToysTool) -> some View {
+        switch tool.id {
+        case "all-devices":
+            NetToysDevicesView(model: scannerModel, scope: .all, paused: pausedAll, openDevice: { openDevice = $0 }) {
+                settingsSection = "scanner"
+                shell.selection = "settings"
+            }
+        // Older pages keep their OnePlus layout inside the new shell.
+        case "ssh-anchor": NetToysAnchorView(host: host).buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
+        case "history": NetToysHistoryView(host: host).buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
+        case "wifi-priority": NetToysWiFiPriorityView().buttonStyle(OnePlusButtonStyle()).onePlusNeutralControls()
+        default:
+            NetToysToolPage(placeholder: tool, input: Binding(get: { shell.inputs[tool.id] ?? "" },
+                                                              set: { shell.inputs[tool.id] = $0 }))
+                .id(tool.id)
+        }
+    }
+
     @ViewBuilder
     private var legacyPage: some View {
-        switch page {
-        case .scanner:
-            EmptyView()
-        case .anchor:
-            NetToysAnchorView(host: host)
-        case .history:
-            NetToysHistoryView(host: host)
-        case .wifiPriority:
-            NetToysWiFiPriorityView()
-        case .settings:
+        if shell.selection == "how-to-use" {
+            howToUsePage
+        } else {
             OnePlusPage {
                 OnePlusPageHeader(title: "Settings", subtitle: "Permissions, scanner, and safety")
             } tabs: {
@@ -351,7 +322,10 @@ public struct NetToysWindowView: View {
                 else if settingsSection == "safety" { NetToysSafetySettingsView() }
                 else { NetToysSettingsView(host: host, enabled: $enabled, isTransitioning: isTransitioning) }
             }
-        case .howToUse:
+        }
+    }
+
+    private var howToUsePage: some View {
             OnePlusPage {
                 OnePlusPageHeader(title: "How to use", subtitle: "Discover devices and keep your network available")
             } content: {
@@ -366,13 +340,12 @@ public struct NetToysWindowView: View {
                     Spacer()
                     Button("Open Settings") {
                         settingsSection = "permissions"
-                        page = .settings
+                        shell.selection = "settings"
                     }
                     .buttonStyle(OnePlusButtonStyle(.link))
                 }
                 .frame(height: OnePlusMetrics.settingRow)
             }
-        }
     }
 
     private func howToSection(_ title: String, _ message: String) -> some View {

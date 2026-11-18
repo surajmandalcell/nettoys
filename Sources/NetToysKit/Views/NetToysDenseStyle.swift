@@ -28,8 +28,17 @@ enum Dense {
     static let field = Color(light: .init(white: 0, alpha: 0.05), dark: .init(white: 1, alpha: 0.08))
     static let track = Color(light: .init(white: 0, alpha: 0.09), dark: .init(white: 1, alpha: 0.14))
 
+    // Sidebar on glass: gray symbols, quiet headers, a light search field, a gray selection fill.
+    static let sidebarSymbol = Color(light: .init(white: 0, alpha: 0.58), dark: .init(white: 1, alpha: 0.66))
+    static let sidebarHeader = Color(light: .init(white: 0, alpha: 0.42), dark: .init(white: 1, alpha: 0.4))
+    static let sidebarField = Color(light: .init(white: 0, alpha: 0.05), dark: .init(white: 1, alpha: 0.07))
+    static let sidebarSelection = Color(light: .init(white: 0, alpha: 0.09), dark: .init(white: 1, alpha: 0.12))
+
     static let rowHeight: CGFloat = 26
     static let fast = Animation.easeOut(duration: 0.12)
+    /// Every expand, collapse, and selection glide (specs/product.md, Utilities expansion).
+    static let spring = Animation.spring(response: 0.30, dampingFraction: 0.86)
+    static func spring(_ reduceMotion: Bool) -> Animation { reduceMotion ? .easeOut(duration: 0.12) : spring }
 
     private static func rgb(_ value: UInt32) -> NSColor {
         NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,

@@ -8,7 +8,7 @@ import SwiftUI
 struct NetToysApp: App {
     @NSApplicationDelegateAdaptor private var delegate: NetToysAppDelegate
     @State private var host = NetToysHost(id: .standalone)
-    @State private var page = NetToysPage.scanner
+    @State private var shell = NetToysShell()
     @State private var prefill: NetToysScanPrefill?
     @AppStorage("nettoys.enabled") private var enabled = false
     @State private var transitioning = false
@@ -29,7 +29,7 @@ struct NetToysApp: App {
     var body: some Scene {
         Window("Sam's Network Utilities", id: "nettoys") {
             OnePlusWindowContent {
-                NetToysWindowView(host: host, page: $page, enabled: enablement, isTransitioning: transitioning) {
+                NetToysWindowView(host: host, shell: shell, enabled: enablement, isTransitioning: transitioning) {
                     defer { prefill = nil }
                     return prefill
                 }
@@ -37,7 +37,8 @@ struct NetToysApp: App {
             }
             .onOpenURL { url in
                 guard let route = NetToysRoute(url) else { return }
-                if let destination = route.page { page = destination }
+                if let toolID = route.toolID { return shell.open(toolID, input: route.input) }
+                if let destination = route.page { shell.selection = destination.selectionID }
                 prefill = route.prefill
                 if let prefill { NotificationCenter.default.post(name: .netToysPrefill, object: prefill) }
             }
@@ -50,7 +51,7 @@ struct NetToysApp: App {
 
         MenuBarExtra {
             NetToysMenuContent(snapshot: $menuSnapshot, host: host) { destination in
-                page = destination
+                shell.selection = destination.selectionID
                 openMainWindow()
             }
         } label: {
@@ -62,6 +63,10 @@ struct NetToysApp: App {
             .task {
                 guard delegate.reopen == nil else { return } // first appearance only
                 delegate.reopen = openMainWindow
+                NetToysPalettePanel.shared.shell = shell
+                NetToysPalettePanel.shared.openWindow = openMainWindow
+                let globalPalette = UserDefaults.standard.object(forKey: NetToysPalettePanel.hotKeyDefaultsKey) as? Bool ?? true
+                NetToysPalettePanel.shared.setHotKey(enabled: globalPalette)
                 // No activate here: a normal launch is already front, and `open -g` must stay in the background.
                 if !delegate.launchedAtLogin { openWindow(id: "nettoys") }
                 if enabled { enabled = await host.loginItems.setEnabled(true) }

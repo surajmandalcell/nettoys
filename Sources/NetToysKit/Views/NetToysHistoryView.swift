@@ -767,6 +767,7 @@ public struct NetToysSettingsView: View {
     @State private var model: NetToysHistoryViewModel
     @State private var localNetworkAccess: NetToysLocalNetworkAccess
     @State private var confirmClear = false
+    @AppStorage(NetToysPalettePanel.hotKeyDefaultsKey) private var globalPalette = true
 
     public init(host: NetToysHost, enabled: Binding<Bool>, isTransitioning: Bool = false) {
         self.host = host
@@ -788,6 +789,13 @@ public struct NetToysSettingsView: View {
                         .labelsHidden().toggleStyle(OnePlusSwitchStyle())
                         .disabled(isTransitioning)
                 }
+            }
+            .environment(\.onePlusCardPadding, 0)
+            OnePlusSettingRow("Command palette from any app", help: "Option-Space opens the tool palette over any app.",
+                              separator: false) {
+                Toggle("Command palette from any app", isOn: $globalPalette)
+                    .labelsHidden().toggleStyle(OnePlusSwitchStyle())
+                    .onChange(of: globalPalette) { NetToysPalettePanel.shared.setHotKey(enabled: globalPalette) }
             }
             .environment(\.onePlusCardPadding, 0)
             if let error = host.loginItems.errorMessage {

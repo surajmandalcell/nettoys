@@ -22,6 +22,33 @@ final class NetToysRouteTests: XCTestCase {
         XCTAssertNil(self.route("nettoys://open?targets=192.168.1.1&ports=0")?.prefill)
     }
 
+    func testToolRoutesFillTheInput() {
+        XCTAssertEqual(route("nettoys://tool/ping?host=192.168.50.1")?.toolID, "ping")
+        XCTAssertEqual(route("nettoys://tool/ping?host=192.168.50.1")?.input, "192.168.50.1")
+        XCTAssertNil(route("nettoys://tool/ping?host=192.168.50.1")?.page)
+        XCTAssertEqual(route("nettoys://tool/http-check?host=https%3A%2F%2Ffiles.example.com%2Fa")?.input, "https://files.example.com/a")
+        XCTAssertNil(route("nettoys://tool/ping")?.input)
+        XCTAssertNil(route("nettoys://tool/ping?host=a%20b%3Bc")?.input)
+        XCTAssertNil(route("nettoys://tool/unknown?host=x"))
+        XCTAssertNil(route("nettoys://tool"))
+        XCTAssertEqual(NetToysTool.all.count, 29)
+        XCTAssertEqual(Set(NetToysTool.all.map(\.id)).count, 29)
+    }
+
+    func testPinsPersistAndReorder() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "nettoys.tests.pins"))
+        defaults.removePersistentDomain(forName: "nettoys.tests.pins")
+        let shell = NetToysShell(defaults: defaults)
+        shell.togglePin("speed-test")
+        shell.togglePin("wake-on-lan")
+        shell.togglePin("ssl-certificate")
+        shell.togglePin("not-a-tool")
+        shell.movePin("ssl-certificate", to: "speed-test")
+        shell.togglePin("wake-on-lan")
+        XCTAssertEqual(NetToysShell(defaults: defaults).pinned, ["ssl-certificate", "speed-test"])
+        defaults.removePersistentDomain(forName: "nettoys.tests.pins")
+    }
+
     func testMenuBarGlyphLoadsAsTemplate() throws {
         let image = try XCTUnwrap(NetToysGlyph.menuBarImage)
         XCTAssertTrue(image.isTemplate)

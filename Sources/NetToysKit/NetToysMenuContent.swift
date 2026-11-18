@@ -196,7 +196,7 @@ struct NetToysMenuPanel: View {
         .background(Panel.fill)
         .scaleEffect(visible || reduceMotion ? 1 : 0.96, anchor: .top)
         .opacity(visible ? 1 : 0)
-        .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.25, dampingFraction: 0.9), value: visible)
+        .animation(Dense.spring(reduceMotion), value: visible)
     }
 
     // MARK: Header: headline and subtitle only.
