@@ -181,7 +181,7 @@ struct NetToysPaletteView: View {
             shell.selection = "all-devices"
             shell.deviceRequest = deviceID
         } else if let toolID = item.toolID {
-            shell.open(toolID, input: item.input)
+            shell.open(toolID, input: item.input, run: true)
         }
         close(true)
     }

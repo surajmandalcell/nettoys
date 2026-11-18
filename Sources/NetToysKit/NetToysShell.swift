@@ -30,9 +30,11 @@ public final class NetToysShell {
         pinned = (defaults.stringArray(forKey: Self.pinsKey) ?? []).filter { NetToysTool.tool($0) != nil }
     }
 
-    public func open(_ id: String, input: String? = nil) {
+    /// Opens a tool with its input filled. Only in-app palette actions pass `run: true`; a nettoys:// URL
+    /// comes from any web page and must never start a scan or request without the user's click.
+    public func open(_ id: String, input: String? = nil, run: Bool = false) {
         if let input { inputs[id] = input }
-        pendingRun = input == nil ? nil : id
+        pendingRun = run && input != nil ? id : nil
         selection = id
     }
 

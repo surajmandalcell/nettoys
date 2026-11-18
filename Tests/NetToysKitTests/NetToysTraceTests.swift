@@ -40,6 +40,20 @@ final class NetToysTraceTests: XCTestCase {
                                                               .fold(14...16), .hop(17)])
     }
 
+    /// A nettoys:// URL from any web page fills the tool but never runs it; only the in-app palette runs.
+    func testURLRouteNeverRuns() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "nettoys.tests.route-run"))
+        defer { defaults.removePersistentDomain(forName: "nettoys.tests.route-run") }
+        let shell = NetToysShell(defaults: defaults)
+        let route = try XCTUnwrap(NetToysRoute(URL(string: "nettoys://tool/port-scan?host=192.168.1.1")!))
+        shell.open(try XCTUnwrap(route.toolID), input: route.input) // the app's onOpenURL call
+        XCTAssertEqual(shell.selection, "port-scan")
+        XCTAssertEqual(shell.inputs["port-scan"], "192.168.1.1")
+        XCTAssertNil(shell.pendingRun)
+        shell.open("ping", input: "203.0.113.200", run: true) // palette action
+        XCTAssertEqual(shell.pendingRun, "ping")
+    }
+
     func testRenderPages() throws {
         guard let out = ProcessInfo.processInfo.environment["NETTOYS_TRACE_RENDER_DIR"] else { throw XCTSkip("render only") }
         try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)

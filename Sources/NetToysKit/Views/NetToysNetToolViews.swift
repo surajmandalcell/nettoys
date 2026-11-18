@@ -222,7 +222,7 @@ struct NetToysSubnetView: View {
     var body: some View {
         let subnet = NetToysSubnet.calculate(input)
         NetToysToolPage(tool: tool, input: $input, subtitle: subnet.map { "IPv\($0.version) · /\($0.prefix) · \($0.hostCount) hosts" },
-                        run: {}) {
+                        run: {}, showsRun: false) {
             if let subnet {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {

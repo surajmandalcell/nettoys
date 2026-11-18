@@ -8,6 +8,8 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
     var subtitle: String?
     var running = false
     var run: (() -> Void)?
+    /// False for a tool that works as you type (Subnet Calculator): the toolbar has no Run button.
+    var showsRun = true
     @ViewBuilder var summary: Summary
     @ViewBuilder var results: Results
     @Environment(NetToysShell.self) private var shell: NetToysShell?
@@ -27,7 +29,7 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // nettoys://tool/<id>?host= and palette actions fill the input and run once.
+        // Palette actions fill the input and run once; nettoys:// routes only fill it (NetToysShell.open).
         .onChange(of: shell?.pendingRun, initial: true) { _, id in
             guard id == tool.id, let shell, let run, hasInput else { return }
             shell.pendingRun = nil
@@ -55,14 +57,16 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
                 .padding(.horizontal, 10).frame(width: 300, height: 28)
                 .background(Capsule().fill(Dense.field))
             }
-            Button {
-                run?()
-            } label: {
-                Label(running ? "Stop" : "Run", systemImage: running ? "stop.fill" : "play.fill")
+            if showsRun {
+                Button {
+                    run?()
+                } label: {
+                    Label(running ? "Stop" : "Run", systemImage: running ? "stop.fill" : "play.fill")
+                }
+                .buttonStyle(DenseCapsuleButtonStyle(prominent: true))
+                .disabled(!canRun)
+                .help(run == nil ? "Coming in this build" : hasInput ? "" : "Enter \(tool.input?.lowercased() ?? "an input")")
             }
-            .buttonStyle(DenseCapsuleButtonStyle(prominent: true))
-            .disabled(!canRun)
-            .help(run == nil ? "Coming in this build" : hasInput ? "" : "Enter \(tool.input?.lowercased() ?? "an input")")
         }
         .padding(.leading, 20).padding(.trailing, 14)
         .frame(height: 52) // centerline 26 pt, shared with the traffic lights
