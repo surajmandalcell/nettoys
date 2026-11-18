@@ -2,16 +2,14 @@ import NetToysCore
 import SwiftUI
 
 /// Uptime Monitor: counts on top, one row per check with its status and a sparkline. Checks are added,
-/// edited, and deleted in a sheet; the toolbar field adds a quick check from a host, host:port, or URL.
+/// edited, and deleted in a sheet.
 struct NetToysUptimeView: View {
     let tool: NetToysTool
     private let live: Bool
     @State private var checks: [NetToysUptimeCheck]
     @State private var samples: [String: [NetToysUptimeSample]]
     @State private var statuses: [UUID: NetToysUptimeStatus]
-    @State private var input = ""
     @State private var editing: NetToysUptimeCheck?
-    @State private var running = false
     @State private var saveError: String?
 
     /// Offscreen renders pass synthetic checks, samples, and statuses; nothing then reads disk or runs probes.
@@ -25,7 +23,8 @@ struct NetToysUptimeView: View {
     }
 
     var body: some View {
-        NetToysToolPage(tool: tool, input: $input, subtitle: subtitle, running: running, run: run) {
+        // Checks run on their own schedule; the page has no input and no Run, only Add Check.
+        NetToysToolPage(tool: tool, input: .constant(""), subtitle: subtitle, run: {}, showsRun: false) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     NetToysSummaryCard(title: "Checks", value: "\(checks.count)")
@@ -45,7 +44,7 @@ struct NetToysUptimeView: View {
                 if let saveError { UtilityNote(symbol: "exclamationmark.triangle.fill", text: saveError, tone: Dense.amber) }
             }
         } results: {
-            UtilityTable(columns: columns, rows: checks, empty: "No checks yet. Type a host or URL above and click Run, or click Add Check.",
+            UtilityTable(columns: columns, rows: checks, empty: "No checks yet. Click Add Check.",
                          open: { editing = $0 }) { check in
                 let state = state(of: check)
                 UtilityStatus(text: state.text, tone: state.tone).cell(columns[0])
@@ -156,33 +155,7 @@ struct NetToysUptimeView: View {
 
     // MARK: Actions
 
-    /// With text in the field, Run adds a check for it; with an empty field, it checks every check now.
-    private func run() {
-        let text = input.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else {
-            running = true
-            Task {
-                await withTaskGroup(of: Void.self) { group in
-                    for check in checks where check.isEnabled { group.addTask { await NetToysUptimeMonitor.shared.checkNow(check) } }
-                }
-                running = false
-            }
-            return
-        }
-        let check = NetToysUptimeCheck(name: Self.name(for: text), kind: Self.kind(for: text))
-        upsert(check)
-        input = ""
-        checkNow(check)
-    }
-
-    /// "https://…" is an HTTP check, "host:443" a TCP check, anything else a ping.
-    static func kind(for text: String) -> NetToysUptimeCheck.Kind {
-        if text.lowercased().hasPrefix("http://") || text.lowercased().hasPrefix("https://") { return .http(url: text, expectedStatus: nil) }
-        let parts = text.split(separator: ":")
-        if parts.count == 2, let port = UInt16(parts[1]) { return .tcp(host: String(parts[0]), port: port) }
-        return .ping(host: text)
-    }
-
+    /// Default check name: the host of a URL or host:port.
     static func name(for text: String) -> String {
         URL(string: text)?.host ?? text.split(separator: ":").first.map(String.init) ?? text
     }

@@ -33,7 +33,7 @@ public struct NetToysTool: Identifiable, Hashable, Sendable {
         .init(id: "internet-check", name: "Internet Check", symbol: "checkmark.seal", line: "Router, DNS, and web, step by step", group: .diagnose, input: nil),
         .init(id: "subnet-calculator", name: "Subnet Calculator", symbol: "square.grid.3x3", line: "Range, mask, hosts of a CIDR", group: .diagnose, input: "CIDR, such as 192.168.1.0/24"),
         // Monitor
-        .init(id: "uptime-monitor", name: "Uptime Monitor", symbol: "clock.badge.checkmark", line: "Checks on a schedule, alerts on down", group: .monitor, input: "Host or URL"),
+        .init(id: "uptime-monitor", name: "Uptime Monitor", symbol: "clock.badge.checkmark", line: "Checks on a schedule, alerts on down", group: .monitor, input: nil),
         .init(id: "speed-test", name: "Speed Test", symbol: "speedometer", line: "History, schedule, ISP report", group: .monitor, input: nil),
         .init(id: "network-monitor", name: "Network Monitor", symbol: "chart.xyaxis.line", line: "Live traffic per interface", group: .monitor, input: nil),
         .init(id: "network-guard", name: "Network Guard", symbol: "bell.badge", line: "Alert when a new device joins", group: .monitor, input: nil),
