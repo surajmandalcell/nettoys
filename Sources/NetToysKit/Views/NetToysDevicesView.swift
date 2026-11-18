@@ -100,7 +100,8 @@ enum NetToysDeviceText {
 /// All Devices, Favorites, and Offline: the scanner table merged with the device list.
 struct NetToysDevicesView: View {
     @Bindable var model: NetToysScannerViewModel
-    let scope: NetToysDeviceScope
+    /// Favorites and Offline are filter choices on All Devices; the sidebar no longer lists them.
+    @State var scope: NetToysDeviceScope = .all
     let paused: Bool
     let openDevice: (String) -> Void
     let openSettings: () -> Void
@@ -188,10 +189,8 @@ struct NetToysDevicesView: View {
             }
             .buttonStyle(.plain).help("Show scan settings").accessibilityLabel("Scan settings")
             Menu {
-                Picker("Show", selection: $model.filter) {
-                    Text("All Devices").tag(NetToysResultFilter.all)
-                    Text("Online").tag(NetToysResultFilter.alive)
-                    Text("With Open Ports").tag(NetToysResultFilter.openPorts)
+                Picker("Show", selection: showBinding) {
+                    ForEach(Show.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.inline)
             } label: {
@@ -207,13 +206,29 @@ struct NetToysDevicesView: View {
 
     }
 
-    private var filterTitle: String {
-        switch model.filter {
-        case .all: "All Devices"
-        case .alive: "Online"
-        case .openPorts: "With Open Ports"
-        }
+    /// One filter list: the device scope (Favorites, Offline) and the scan filter (Online, With Open Ports).
+    private enum Show: String, CaseIterable {
+        case all = "All Devices", favorites = "Favorites", offline = "Offline", online = "Online", openPorts = "With Open Ports"
     }
+
+    private var showBinding: Binding<Show> {
+        Binding(get: {
+            switch (scope, model.filter) {
+            case (.favorites, _): .favorites
+            case (.offline, _): .offline
+            case (_, .alive): .online
+            case (_, .openPorts): .openPorts
+            default: .all
+            }
+        }, set: { show in
+            withAnimation(Dense.spring(reduceMotion)) {
+                scope = show == .favorites ? .favorites : show == .offline ? .offline : .all
+                model.filter = show == .online ? .alive : show == .openPorts ? .openPorts : .all
+            }
+        })
+    }
+
+    private var filterTitle: String { showBinding.wrappedValue.rawValue }
 
     @ViewBuilder private var scanButton: some View {
         if model.isScanning {
