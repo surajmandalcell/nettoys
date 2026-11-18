@@ -1,0 +1,36 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "sams-network-utilities",
+  "title": "Sam's Network Utilities",
+  "description": "Open any of the 29 network tools in Sam's Network Utilities, with a host filled in.",
+  "icon": "icon.png",
+  "author": "surajmandalcell",
+  "license": "MIT",
+  "platforms": ["macOS"],
+  "categories": ["Developer Tools", "System"],
+  "commands": [
+    {
+      "name": "open-tool",
+      "title": "Open Tool",
+      "subtitle": "Sam's Network Utilities",
+      "description": "Pick a network tool and open it in the app.",
+      "mode": "view",
+      "arguments": [
+        { "name": "host", "type": "text", "placeholder": "Host (optional)", "required": false }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.83.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.10",
+    "@types/react": "^18.3.3",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "typecheck": "tsc --noEmit"
+  }
+}
