@@ -1394,7 +1394,8 @@ nonisolated enum HostResolver {
         guard sent == query.count else { return nil }
         var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
         guard Darwin.poll(&event, 1, timeoutMilliseconds) > 0 else { return nil }
-        var buffer = [UInt8](repeating: 0, count: 512)
+        // Room for EDNS0 replies (Diagnose asks for 1232 bytes); classic queries still get 512 at most.
+        var buffer = [UInt8](repeating: 0, count: 4_096)
         let received = recv(descriptor, &buffer, buffer.count, 0)
         guard received > 0 else { return nil }
         return Array(buffer.prefix(received))
