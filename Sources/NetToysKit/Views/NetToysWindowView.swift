@@ -312,11 +312,26 @@ public struct NetToysWindowView: View {
         case "path-mtu": NetToysPathMTUView(tool: tool, input: shell.diagnoseField(tool))
         case "internet-check": NetToysInternetCheckView(tool: tool, input: shell.diagnoseField(tool))
         case "subnet-calculator": NetToysSubnetView(tool: tool, input: shell.diagnoseField(tool))
+        case "uptime-monitor": NetToysUptimeView(tool: tool)
+        case "speed-test": NetToysSpeedView(tool: tool)
+        case "network-monitor": NetToysTrafficView(tool: tool)
+        case "bonjour-browser": NetToysBonjourView(tool: tool)
+        case "arp-table": NetToysARPView(tool: tool)
+        case "mac-vendor": NetToysMACVendorView(tool: tool, input: toolInput(tool))
+        case "my-connection": NetToysMyConnectionView(tool: tool)
+        case "ipv6-check": NetToysIPv6View(tool: tool)
+        case "clock-check": NetToysClockView(tool: tool, input: toolInput(tool))
+        case "wifi-analyzer": NetToysWiFiAnalyzerView(tool: tool)
+        case "wifi-signal": NetToysWiFiSignalView(tool: tool)
         default:
             NetToysToolPage(placeholder: tool, input: Binding(get: { shell.inputs[tool.id] ?? "" },
                                                               set: { shell.inputs[tool.id] = $0 }))
                 .id(tool.id)
         }
+    }
+
+    private func toolInput(_ tool: NetToysTool) -> Binding<String> {
+        Binding(get: { shell.inputs[tool.id] ?? "" }, set: { shell.inputs[tool.id] = $0 })
     }
 
     @ViewBuilder

@@ -1,7 +1,9 @@
 import Foundation
+import NetToysCore
 import Observation
 
-/// Runs macOS `networkQuality` for a download test and keeps the last result.
+/// The manual speed test that the menu row and the Speed Test page share. Each finished run is saved
+/// to the speed history, so both show the same last result.
 @Observable
 @MainActor
 final class NetToysSpeedTest {
@@ -11,88 +13,48 @@ final class NetToysSpeedTest {
         case failed(String)
     }
 
-    static let maximumSeconds: TimeInterval = 20
-    private static let lastKey = "nettoys.speedTest.lastMbps"
+    static let shared = NetToysSpeedTest()
+    /// networkQuality's own limit; the public IP lookup adds a few seconds after it.
+    static let maximumSeconds: TimeInterval = 30
 
     private(set) var phase = Phase.idle
-    private(set) var lastMbps: Double?
-    /// The download value while the test runs.
-    private(set) var liveMbps: Double?
-    @ObservationIgnored private var process: Process?
-    @ObservationIgnored private let defaults: UserDefaults
+    /// Every saved run, oldest first.
+    private(set) var history: [NetToysSpeedRecord] = []
+    @ObservationIgnored private var task: Task<Void, Never>?
 
-    init(defaults: UserDefaults, phase: Phase = .idle, liveMbps: Double? = nil) {
-        self.defaults = defaults
+    init(history: [NetToysSpeedRecord]? = nil, phase: Phase = .idle) {
         self.phase = phase
-        self.liveMbps = liveMbps
-        lastMbps = defaults.object(forKey: Self.lastKey) as? Double
+        if let history { self.history = history } else { Task { await reload() } }
     }
 
     var isRunning: Bool { if case .running = phase { true } else { false } }
+    var last: NetToysSpeedRecord? { history.last }
+
+    func reload() async {
+        history = await Task.detached(priority: .utility) { NetToysSpeedHistory.load() }.value
+    }
 
     func start() {
         guard !isRunning else { return }
-        let process = Process()
-        // networkQuality prints live values only to a terminal; `script` gives it one. Stopping `script` stops it.
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/script")
-        process.arguments = ["-q", "/dev/null", "/usr/bin/networkQuality", "-u", "-M", "\(Int(Self.maximumSeconds))"]
-        let output = Pipe()
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        self.process = process
-        liveMbps = nil
         phase = .running(started: Date())
-        Task {
-            let text = await Task.detached(priority: .utility) { () -> String? in
-                do { try process.run() } catch { return nil }
-                var text = ""
-                while let chunk = try? output.fileHandleForReading.read(upToCount: 4_096), !chunk.isEmpty {
-                    text += String(decoding: chunk, as: UTF8.self)
-                    if text.utf8.count > 262_144 { text = String(text.suffix(4_096)) }
-                    if let mbps = Self.downloadMbps(text) {
-                        Task { @MainActor in if self.process === process { self.liveMbps = mbps } }
-                    }
-                }
-                process.waitUntilExit()
-                return text
-            }.value
-            guard self.process === process else { return }
-            self.process = nil
-            liveMbps = nil
-            if let mbps = text.flatMap({ Self.downloadMbps($0, final: true) }) {
-                lastMbps = mbps
-                defaults.set(mbps, forKey: Self.lastKey)
+        task = Task {
+            do {
+                let record = try await NetToysSpeedTestRunner.run(maximumSeconds: Int(Self.maximumSeconds))
+                try? await Task.detached(priority: .utility) { try NetToysSpeedHistory.append(record) }.value
+                await reload()
                 phase = .idle
-            } else {
-                phase = .failed("The speed test did not finish.")
+            } catch is CancellationError {
+                phase = .idle
+            } catch {
+                guard !Task.isCancelled else { phase = .idle; return }
+                phase = .failed(error.localizedDescription)
             }
         }
     }
 
     func stop() {
-        process?.terminate()
-        process = nil
-        liveMbps = nil
+        task?.cancel()
+        task = nil
         phase = .idle
-    }
-
-    /// The newest download value in networkQuality's terminal output. Live lines read
-    /// "Downlink: 286.335 Mbps, 52 RPM - Uplink: ..."; the summary reads "Downlink capacity: 11.385 Gbps".
-    nonisolated static func downloadMbps(_ output: String, final: Bool = false) -> Double? {
-        let lines = output.split(whereSeparator: \.isNewline)
-        for line in lines.reversed() where line.contains(final ? "Downlink capacity:" : "Downlink") {
-            let words = line.split(separator: " ")
-            for index in words.indices.dropLast() {
-                guard let value = Double(words[index]) else { continue }
-                switch words[index + 1].trimmingCharacters(in: .punctuationCharacters) {
-                case "Kbps": return value / 1_000
-                case "Mbps": return value
-                case "Gbps": return value * 1_000
-                default: continue
-                }
-            }
-        }
-        return nil
     }
 }

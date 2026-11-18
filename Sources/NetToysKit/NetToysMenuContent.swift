@@ -116,13 +116,12 @@ extension NetToysTraySnapshot {
 public struct NetToysMenuContent: View {
     @Binding private var snapshot: NetToysTraySnapshot
     private let openPage: (NetToysPage) -> Void
-    @State private var speedTest: NetToysSpeedTest
+    private let speedTest = NetToysSpeedTest.shared
     @State private var visible = false
 
     public init(snapshot: Binding<NetToysTraySnapshot>, host: NetToysHost, openPage: @escaping (NetToysPage) -> Void) {
         _snapshot = snapshot
         self.openPage = openPage
-        _speedTest = State(initialValue: NetToysSpeedTest(defaults: host.defaults))
     }
 
     public var body: some View {
@@ -342,7 +341,7 @@ struct NetToysMenuPanel: View {
             TimelineView(.periodic(from: started, by: 0.25)) { context in
                 let fraction = min(context.date.timeIntervalSince(started) / NetToysSpeedTest.maximumSeconds, 0.97)
                 NetToysWellRow(symbol: "gauge.with.dots.needle.67percent", title: "Testing speed…",
-                               detail: speedTest.liveMbps.map { "Download \(Int($0.rounded())) Mbps" } ?? "Measuring download",
+                               detail: "Measuring download and upload",
                                value: "Stop", valueIsAction: true, ring: fraction) {
                     speedTest.stop()
                 }
@@ -351,7 +350,7 @@ struct NetToysMenuPanel: View {
             let failed: Bool = if case .failed = speedTest.phase { true } else { false }
             NetToysWellRow(symbol: "gauge.with.dots.needle.67percent", title: "Run Speed Test",
                            detail: failed ? "The last test did not finish" : nil,
-                           value: speedTest.lastMbps.map { "Last \(Int($0.rounded())) Mbps" }) {
+                           value: speedTest.last.map { "Last \(Int($0.downloadMbps.rounded())) Mbps" }) {
                 speedTest.start()
             }
         }
