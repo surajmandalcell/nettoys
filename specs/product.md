@@ -86,5 +86,9 @@ Renders: https://claude.ai/artifact/JtbRQVx3AjXGnEv93ZYrpK
   expand and collapse in the app animates with it.
 - Tool page: path diagram on top of the hop table. Long paths fold quiet
   hops into one "+N" stop; a click opens the full path wrapped into rows
-  (a snake with rounded bends), with a control to fold it again. Icons
-  and the diagram look still get a premium pass.
+  (a snake with rounded bends), with a control to fold it again. Look:
+  "Quiet rings" (round 13 option 3). Fold and expand motion: "Line draws
+  through" (320 ms line draw, snappy spring), but the rings settle with
+  no overshoot, bounce, or bob.
+- All 29 tools use the same tool page: a summary or diagram on top, the
+  result table below.
