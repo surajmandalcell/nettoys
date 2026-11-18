@@ -14,7 +14,7 @@ public final class NetToysHost {
     public init(id: NetToysHostID, requestsPermissions: Bool = true,
                 defaults: UserDefaults = .standard, scannerDefaults: UserDefaults? = nil) {
         self.id = id
-        displayName = id == .macPowerToys ? "MacPowerToys" : "Sam's NetToys"
+        displayName = id == .macPowerToys ? "MacPowerToys" : "Sam's Network Utilities"
         self.requestsPermissions = requestsPermissions
         self.defaults = defaults
         let shared = scannerDefaults ?? UserDefaults(suiteName: NetToysPreferences.suiteName)!

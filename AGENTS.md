@@ -14,7 +14,8 @@ the missing guidance before implementation. Keep shared rules in one place.
 
 ## Product (owner, 2026-11-16)
 
-- The visible product name is Sam's NetToys (app name, window titles,
+- The visible product name is Sam's Network Utilities (owner, 2026-11-18;
+  was Sam's NetToys) (app name, window titles,
   display name). Package, module, bundle id, and repository names stay
   `NetToys` / `nettoys`.
 - NetToys left MacPowerToys. This repository is its only home and owns the

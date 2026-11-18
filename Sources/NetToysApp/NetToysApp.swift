@@ -27,7 +27,7 @@ struct NetToysApp: App {
     }
 
     var body: some Scene {
-        Window("Sam's NetToys", id: "nettoys") {
+        Window("Sam's Network Utilities", id: "nettoys") {
             OnePlusWindowContent {
                 NetToysWindowView(host: host, page: $page, enabled: enablement, isTransitioning: transitioning) {
                     defer { prefill = nil }
@@ -57,7 +57,7 @@ struct NetToysApp: App {
             Group {
                 if let glyph = NetToysGlyph.menuBarImage { Image(nsImage: glyph) } else { Image(systemName: "network") }
             }
-            .accessibilityLabel("Sam's NetToys")
+            .accessibilityLabel("Sam's Network Utilities")
             // The label exists from launch, so monitoring starts here even when no window opens.
             .task {
                 guard delegate.reopen == nil else { return } // first appearance only

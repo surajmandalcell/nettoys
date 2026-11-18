@@ -186,7 +186,7 @@ struct NetToysMenuPanel: View {
             copyRow
             systemRow
             separator
-            NetToysMenuItem(title: "Open Sam's NetToys", key: "⌘O") { openPage(.scanner) }
+            NetToysMenuItem(title: "Open Sam's Network Utilities", key: "⌘O") { openPage(.scanner) }
                 .keyboardShortcut("o")
             NetToysMenuItem(title: "Settings…", key: "⌘,") { openPage(.settings) }
                 .keyboardShortcut(",")

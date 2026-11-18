@@ -271,7 +271,7 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
 
     func export() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Sam's NetToys Network History.csv"
+        panel.nameFieldStringValue = "Sam's Network Utilities Network History.csv"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let rows = visibleEventRows.map(\.event).map { event in
             [
@@ -292,7 +292,7 @@ final class NetToysHistoryViewModel: NSObject, @preconcurrency CLLocationManager
     func export(_ run: NetToysScanRun) {
         guard !isExporting else { return }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Sam's NetToys Scan \(run.date.formatted(.iso8601)).csv"
+        panel.nameFieldStringValue = "Sam's Network Utilities Scan \(run.date.formatted(.iso8601)).csv"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         isExporting = true
         Task { [weak self] in
@@ -725,10 +725,10 @@ struct NetToysHistoryView: View {
               snapshot.networkID != "disconnected"
         else { return nil }
         if model.helperStatus?.ssidAccess == .notDetermined {
-            return "Sam's NetToys is waiting for its Location permission. Respond to the macOS prompt or open Location Settings."
+            return "Sam's Network Utilities is waiting for its Location permission. Respond to the macOS prompt or open Location Settings."
         }
         if model.helperStatus?.ssidAccess == .denied || model.helperStatus?.ssidAccess == .restricted {
-            return "Allow Sam's NetToys in Location Services so history can record Wi-Fi names."
+            return "Allow Sam's Network Utilities in Location Services so history can record Wi-Fi names."
         }
         if model.locationRequestFailed {
             return "macOS blocked the Location request. Open Location Services to allow \(model.host.displayName)."
@@ -784,7 +784,7 @@ public struct NetToysSettingsView: View {
                         ProgressView().controlSize(.small).accessibilityLabel("Loading network settings")
                             .accessibilityIdentifier("nettoys.settings-loading")
                     }
-                    Toggle("Enable Sam's NetToys", isOn: $enabled)
+                    Toggle("Enable Sam's Network Utilities", isOn: $enabled)
                         .labelsHidden().toggleStyle(OnePlusSwitchStyle())
                         .disabled(isTransitioning)
                 }
@@ -892,13 +892,13 @@ public struct NetToysSettingsView: View {
 
     private var locationStatusMessage: String {
         if model.helperStatus?.ssidAccess == .notDetermined {
-            return "Sam's NetToys is waiting for its Location permission so it can record Wi-Fi names."
+            return "Sam's Network Utilities is waiting for its Location permission so it can record Wi-Fi names."
         }
         if model.helperStatus?.ssidAccess == .denied || model.helperStatus?.ssidAccess == .restricted {
-            return "Enable Sam's NetToys in Privacy & Security > Location Services to record Wi-Fi names."
+            return "Enable Sam's Network Utilities in Privacy & Security > Location Services to record Wi-Fi names."
         }
         if model.helperSSIDUnavailable {
-            return "Location access is allowed, but Sam's NetToys could not read the current Wi-Fi name. Check Location Services and try again."
+            return "Location access is allowed, but Sam's Network Utilities could not read the current Wi-Fi name. Check Location Services and try again."
         }
         if model.locationRequestFailed {
             return "macOS blocked the Location request. Open Privacy & Security > Location Services and allow \(host.displayName)."

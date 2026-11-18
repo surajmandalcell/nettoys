@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Sam's NetToys</string>
+	<string>Sam's Network Utilities</string>
 	<key>CFBundleExecutable</key>
 	<string>NetToys</string>
 	<key>CFBundleIdentifier</key>
@@ -11,7 +11,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Sam's NetToys</string>
+	<string>Sam's Network Utilities</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -33,14 +33,14 @@
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleURLTypes</key>
-	<array><dict><key>CFBundleURLName</key><string>Sam's NetToys routes</string>
+	<array><dict><key>CFBundleURLName</key><string>Sam's Network Utilities routes</string>
 	<key>CFBundleURLSchemes</key><array><string>nettoys</string></array></dict></array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Sam's NetToys scans devices and checks SSH hosts on your local network.</string>
+	<string>Sam's Network Utilities scans devices and checks SSH hosts on your local network.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>Sam's NetToys uses Location access to show Wi-Fi network names in history.</string>
+	<string>Sam's Network Utilities uses Location access to show Wi-Fi network names in history.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Sam's NetToys uses Location access to show Wi-Fi network names in history.</string>
+	<string>Sam's Network Utilities uses Location access to show Wi-Fi network names in history.</string>
 	<key>NSBonjourServices</key>
 	<array><string>_macpowertoys-permission._tcp</string></array>
 </dict>

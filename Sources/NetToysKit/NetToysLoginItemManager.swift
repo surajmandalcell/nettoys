@@ -34,10 +34,10 @@ public final class NetToysLoginItemManager {
             if enabled, app.status != .enabled { try app.register() }
             if !enabled, app.status != .notRegistered, app.status != .notFound { try await app.unregister() }
             if enabled, app.status == .requiresApproval {
-                errorMessage = "Allow Sam's NetToys in System Settings > General > Login Items to start it at login."
+                errorMessage = "Allow Sam's Network Utilities in System Settings > General > Login Items to start it at login."
             }
         } catch {
-            errorMessage = "Sam's NetToys could not change its login item: \(error.localizedDescription)"
+            errorMessage = "Sam's Network Utilities could not change its login item: \(error.localizedDescription)"
         }
         return true
     }

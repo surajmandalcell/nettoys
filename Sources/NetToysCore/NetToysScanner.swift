@@ -1866,9 +1866,9 @@ package nonisolated enum NetToysScanImport {
 
         var errorDescription: String? {
             switch self {
-            case .unsupportedVersion(let version): "Unsupported Sam's NetToys results version: \(version)"
-            case .empty: "The Sam's NetToys results file is empty."
-            case .duplicateAddress: "The Sam's NetToys results file contains duplicate IP addresses."
+            case .unsupportedVersion(let version): "Unsupported Sam's Network Utilities results version: \(version)"
+            case .empty: "The Sam's Network Utilities results file is empty."
+            case .duplicateAddress: "The Sam's Network Utilities results file contains duplicate IP addresses."
             }
         }
     }

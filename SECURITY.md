@@ -15,7 +15,7 @@ or scan results. You should receive a reply within seven days.
 
 ## Security boundaries
 
-- When a host moves, Sam's NetToys changes only that host's `HostName` line in
+- When a host moves, Sam's Network Utilities changes only that host's `HostName` line in
   `~/.ssh/config`. It searches only the host's home network and accepts the
   new address only when the device shows a MAC address it already knows or
   the same SSH host key; a matching name with an open port is not enough.
@@ -23,7 +23,7 @@ or scan results. You should receive a reply within seven days.
   can undo it. Setup may add one marked host-key policy block so an address
   change does not trigger a prompt. A changed host key still stops the
   connection.
-- Sam's NetToys has no privileged or separate background parts. It runs as
+- Sam's Network Utilities has no privileged or separate background parts. It runs as
   you, reads neighbor MAC addresses with `/usr/sbin/arp -an`, and monitors
   only while the app runs.
 - Wi-Fi Priority stores no Wi-Fi passwords. It joins networks that macOS

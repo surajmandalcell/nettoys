@@ -15,7 +15,7 @@ enum NetToysResultFilter: String, CaseIterable, Identifiable {
 }
 
 nonisolated enum NetToysExportFormat: String, CaseIterable, Identifiable, Sendable {
-    case savedResults = "Sam's NetToys Results"
+    case savedResults = "Sam's Network Utilities Results"
     case csv = "CSV"
     case text = "Text"
     case xml = "XML"
@@ -593,7 +593,7 @@ final class NetToysScannerViewModel {
     func export(_ format: NetToysExportFormat, rows: [NetToysScanResult]) {
         guard !rows.isEmpty, !isExporting else { return }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Sam's NetToys Scan.\(format.fileExtension)"
+        panel.nameFieldStringValue = "Sam's Network Utilities Scan.\(format.fileExtension)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         isExporting = true
         Task { [weak self] in
@@ -840,7 +840,7 @@ struct NetToysScannerSettingsView: View {
                                     OnePlusTextField("Name", text: $opener.name)
                                         .frame(width: OnePlusMetrics.controlColumn)
                                     OnePlusTextField("URL template", text: $opener.urlTemplate)
-                                        .help("Use {ip}, {hostname}, and {port}. Sam's NetToys shows a preview before opening a URL.")
+                                        .help("Use {ip}, {hostname}, and {port}. Sam's Network Utilities shows a preview before opening a URL.")
                                     OnePlusStepperField("Port", value: $opener.requiredPort,
                                                         in: 1...65_535).frame(width: OnePlusMetrics.controlColumn)
                                     Button(role: .destructive) {

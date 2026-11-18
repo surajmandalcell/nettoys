@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="Assets/NetToysLogo.png" width="128" height="128" alt="Sam's NetToys app icon">
+  <img src="Assets/NetToysLogo.png" width="128" height="128" alt="Sam's Network Utilities app icon">
 </p>
 
-<h1 align="center">Sam's NetToys</h1>
+<h1 align="center">Sam's Network Utilities</h1>
 
 <p align="center">
   Scan your network, keep SSH hosts reachable when their address changes,<br>
@@ -20,12 +20,12 @@
   HTTP servers, and MAC vendors. Sort, filter, search, comment, mark favorites,
   and export to six formats.
 - **SSH Anchor.** Keep an SSH host reachable when DHCP gives it a new address.
-  Sam's NetToys checks the port every few seconds. When the host moves, it finds the
+  Sam's Network Utilities checks the port every few seconds. When the host moves, it finds the
   host again by MAC address or host name and changes only that host's
   `HostName` line in `~/.ssh/config`. It verifies the new address first, keeps a
   backup, and can fall back to Tailscale while the local address is down.
 - **Wi-Fi Priority.** Put your saved networks in order. When the current network
-  stops working for a time you choose, Sam's NetToys joins the next one. Your iPhone
+  stops working for a time you choose, Sam's Network Utilities joins the next one. Your iPhone
   hotspot stays the last fallback.
 - **Network History.** See uptime and every outage for each Wi-Fi network, with
   the exact time and length of each one.
@@ -40,7 +40,7 @@
    Privacy & Security**.
 2. Allow **Local Network** access when you first scan. Allow **Location** if you
    want Wi-Fi names; macOS hides network names without it.
-3. Turn on monitoring in **Settings**. Sam's NetToys then starts at login and
+3. Turn on monitoring in **Settings**. Sam's Network Utilities then starts at login and
    stays in the menu bar after you close its window. It runs SSH Anchor, Wi-Fi
    Priority, and Network History until you quit it.
 
@@ -65,9 +65,9 @@ Settings and history live in
 ## Limits
 
 - Scanning and SSH Anchor support IPv4 only.
-- macOS starts Instant Hotspot itself. Sam's NetToys can only put it last in the
+- macOS starts Instant Hotspot itself. Sam's Network Utilities can only put it last in the
   order; it cannot connect to it.
-- Quitting Sam's NetToys stops monitoring until you open it again.
+- Quitting Sam's Network Utilities stops monitoring until you open it again.
 - Angry IP Scanner plugins are not supported. Use the built-in custom fetchers
   and openers.
 

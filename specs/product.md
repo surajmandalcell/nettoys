@@ -33,7 +33,7 @@ version history).
   Test" runs inside its row (progress ring, live "Download 286 Mbps",
   Stop); when idle it shows the last result, such as "Last 412 Mbps".
   "Copy IP Address" shows the address as its value. Then menu rows "Open
-  Sam's NetToys" (⌘O) and "Settings…" (⌘,). One content edge, nested
+  Sam's Network Utilities" (⌘O) and "Settings…" (⌘,). One content edge, nested
   corners, a material surface, 0.5 pt hairlines.
 - Look: "Dense pro" polish.
 - Durations: full hours, "min", "sec", for example "1 hour 52 min".
