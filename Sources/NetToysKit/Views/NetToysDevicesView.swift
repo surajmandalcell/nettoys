@@ -592,39 +592,42 @@ private struct NetToysScanInspector: View {
                 }
                 .disabled(model.isScanning)
                 VStack(alignment: .leading, spacing: 8) {
-                    Menu("Presets") {
-                        Button(activeNetworkCIDR.map { "Local Subnet · \($0)" } ?? "Local Subnet") {
-                            if let activeNetworkCIDR { model.useActiveNetwork(activeNetworkCIDR) }
-                        }
-                        .disabled(activeNetworkCIDR == nil)
-                        Button("Random Addresses…") { showRandomTargets = true }
-                        Button("Import Target List…") { model.importTargets() }
-                        Button("Load Saved Results…") { model.loadResults() }
-                        Divider()
-                        Button(model.favoriteTargets.contains(model.targetInput) ? "Remove Saved Target" : "Save Target") {
-                            model.toggleFavoriteTarget()
-                        }
-                        ForEach(model.favoriteTargets, id: \.self) { target in
-                            Button(target) { model.targetInput = target }
-                        }
-                    }
-                    Menu("Export") {
-                        ForEach([NetToysExportFormat.csv, .savedResults]) { format in
-                            Button(format.rawValue) { model.export(format, rows: model.visibleResults) }
+                    OnePlusMenuButton("Presets", variant: .hostTitle) { presetItems }
+                    OnePlusMenuButton("Export", variant: .hostTitle) {
+                        [NetToysExportFormat.csv, .savedResults].map { format in
+                            .item(OnePlusPopupMenuItem(format.rawValue) { model.export(format, rows: model.visibleResults) })
                         }
                     }
                     .disabled(model.visibleResults.isEmpty || model.isExporting)
                 }
-                .menuStyle(.button).buttonStyle(DenseCapsuleButtonStyle()).fixedSize()
+                .buttonStyle(DenseCapsuleButtonStyle())
                 .disabled(model.isScanning || model.isImporting)
                 Button("Scanner Settings…", action: openSettings)
-                    .buttonStyle(.link).font(.system(size: 12))
+                    .buttonStyle(OnePlusButtonStyle(.link))
             }
             .padding(16)
         }
         .frame(width: 280)
         .background(Dense.content)
         .overlay(alignment: .leading) { Rectangle().fill(Dense.hair).frame(width: 1) }
+    }
+
+    private var presetItems: [OnePlusPopupMenuEntry] {
+        var items: [OnePlusPopupMenuEntry] = [
+            .item(OnePlusPopupMenuItem(activeNetworkCIDR.map { "Local Subnet · \($0)" } ?? "Local Subnet",
+                                       isEnabled: activeNetworkCIDR != nil) {
+                if let activeNetworkCIDR { model.useActiveNetwork(activeNetworkCIDR) }
+            }),
+            .item(OnePlusPopupMenuItem("Random Addresses…") { showRandomTargets = true }),
+            .item(OnePlusPopupMenuItem("Import Target List…") { model.importTargets() }),
+            .item(OnePlusPopupMenuItem("Load Saved Results…") { model.loadResults() }),
+            .separator(),
+            .item(OnePlusPopupMenuItem(model.favoriteTargets.contains(model.targetInput) ? "Remove Saved Target" : "Save Target") {
+                model.toggleFavoriteTarget()
+            }),
+        ]
+        items += model.favoriteTargets.map { target in .item(OnePlusPopupMenuItem(target) { model.targetInput = target }) }
+        return items
     }
 
     private func field(_ prompt: String, text: Binding<String>) -> some View {

@@ -1,4 +1,5 @@
 import AppKit
+import OnePlusUI
 import SwiftUI
 
 /// "Dense pro" tokens for the main window (specs/product.md). Each color follows the system Light or Dark look.
@@ -142,7 +143,7 @@ struct DenseSwitchRow: View {
             }
             Spacer(minLength: 8)
             Toggle(label, isOn: isOn ?? .constant(false))
-                .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                .labelsHidden().toggleStyle(OnePlusLinearSwitchStyle())
                 .disabled(isOn == nil)
         }
         .padding(.horizontal, 10).frame(height: detail == nil ? 30 : 40)

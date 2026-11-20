@@ -1,4 +1,5 @@
 import NetToysCore
+import OnePlusUI
 import SwiftUI
 
 /// Device details: a tall single column centered over the dimmed, blurred window.
@@ -111,21 +112,17 @@ struct NetToysDeviceModal: View {
                 Label("Copy IP Address", systemImage: "doc.on.doc")
             }
             Spacer(minLength: 8)
-            Menu {
-                Button("Add to SSH Anchor") {
+            OnePlusMenuButton("More", variant: .hostIcon, items: [
+                .item(OnePlusPopupMenuItem("Add to SSH Anchor", isEnabled: !paused) {
                     NetToysDeviceActions.addToAnchor(result)
                     close()
-                }
-                .disabled(paused)
-                Button("Copy MAC Address") { NetToysDeviceActions.copy(result.macAddress ?? "") }
-                    .disabled(result.macAddress == nil)
-                Divider()
-                Button("Forget Device…", role: .destructive) { confirmForget = true }
-            } label: {
-                Image(systemName: "ellipsis").font(.system(size: 12, weight: .medium))
-            }
-            .menuStyle(.button).menuIndicator(.hidden).fixedSize()
-            .accessibilityLabel("More")
+                }),
+                .item(OnePlusPopupMenuItem("Copy MAC Address", isEnabled: result.macAddress != nil) {
+                    NetToysDeviceActions.copy(result.macAddress ?? "")
+                }),
+                .separator(),
+                .item(OnePlusPopupMenuItem("Forget Device…", role: .destructive) { confirmForget = true }),
+            ])
         }
         .buttonStyle(DenseCapsuleButtonStyle())
     }
