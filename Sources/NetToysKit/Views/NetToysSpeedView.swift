@@ -1,5 +1,6 @@
 import Charts
 import NetToysCore
+import OnePlusUI
 import SwiftUI
 
 /// Speed Test: the last run on top, the history chart, the schedule, and the ISP report; every run below.
@@ -149,12 +150,8 @@ struct NetToysSpeedView: View {
                     DatePicker("Time", selection: time, displayedComponents: .hourAndMinute)
                         .labelsHidden().datePickerStyle(.field).controlSize(.small).fixedSize()
                 }
-                Picker("Run", selection: mode) {
-                    Text("Off").tag(Repeat.off)
-                    Text("Every 6 hours").tag(Repeat.sixHours)
-                    Text("Daily").tag(Repeat.daily)
-                }
-                .labelsHidden().pickerStyle(.menu).controlSize(.small).fixedSize()
+                OnePlusLinearSelect(choices: [(Repeat.off, "Off"), (.sixHours, "Every 6 hours"), (.daily, "Daily")],
+                                    selection: mode, accessibilityLabel: "Run", width: 136)
             }
             .padding(.horizontal, 10).frame(height: 34)
             .overlay(alignment: .bottom) { DenseHairline().padding(.horizontal, 10) }
@@ -175,11 +172,9 @@ struct NetToysSpeedView: View {
         let report = NetToysISPReport(records: history, days: reportDays)
         let hours = report.downloadByHour.sorted { $0.value.median < $1.value.median }
         return DenseSection(title: "ISP report") {
-            Picker("Period", selection: $reportDays) {
-                Text("7 days").tag(7)
-                Text("30 days").tag(30)
-            }
-            .labelsHidden().pickerStyle(.segmented).controlSize(.small).padding(8)
+            OnePlusLinearSegmented(choices: [(7, "7 days"), (30, "30 days")], selection: $reportDays,
+                                   accessibilityLabel: "Period", sizing: .snug)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(8)
             .overlay(alignment: .bottom) { DenseHairline().padding(.horizontal, 10) }
             DenseValueRow(label: "Download, median", value: stat(report.download?.median))
             DenseValueRow(label: "Download, slowest tenth", value: stat(report.download?.p10))

@@ -1,4 +1,5 @@
 import NetToysCore
+import OnePlusUI
 import SwiftUI
 
 let diagnoseRed = Color(nsColor: .systemRed)
@@ -9,10 +10,7 @@ private struct DNSTypePicker: View {
     var types: [NetToysDNSRecordType] = [.a, .aaaa, .mx, .txt, .ns, .cname, .soa, .ptr]
 
     var body: some View {
-        Picker("Record type", selection: $type) {
-            ForEach(types) { Text($0.name).tag($0) }
-        }
-        .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+        OnePlusLinearSegmented(choices: types.map { ($0, $0.name) }, selection: $type, accessibilityLabel: "Record type", sizing: .snug)
     }
 }
 

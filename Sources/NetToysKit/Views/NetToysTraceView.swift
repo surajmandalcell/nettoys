@@ -1,5 +1,6 @@
 import NetToysCore
 import Observation
+import OnePlusUI
 import SwiftUI
 
 /// Runs traceroute (3 rounds) or live MTR (until stopped) and keeps the latest hop table.
@@ -117,11 +118,8 @@ struct NetToysTraceView: View {
                 Text("\(hops.count) hops").font(.system(size: 12)).foregroundStyle(Dense.secondary).monospacedDigit()
                 Text(note).font(.system(size: 11)).foregroundStyle(Dense.secondary).lineLimit(1).padding(.leading, 8)
                 Spacer(minLength: 8)
-                Picker("Mode", selection: $model.live) {
-                    Text("List").tag(false)
-                    Text("Live MTR").tag(true)
-                }
-                .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+                OnePlusLinearSegmented(choices: [(false, "List"), (true, "Live MTR")], selection: $model.live,
+                                       accessibilityLabel: "Mode", sizing: .snug)
                 if layout.canFold && !layout.snakeOnly {
                     Button { setExpanded(!expanded) } label: {
                         HStack(spacing: 5) {

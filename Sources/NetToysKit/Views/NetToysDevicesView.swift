@@ -1,5 +1,6 @@
 import AppKit
 import NetToysCore
+import OnePlusUI
 import SwiftUI
 
 /// The three Devices views in the sidebar. They share one table.
@@ -189,16 +190,8 @@ struct NetToysDevicesView: View {
                     .frame(width: 30, height: 28).contentShape(Rectangle())
             }
             .buttonStyle(.plain).help("Show scan settings").accessibilityLabel("Scan settings")
-            Menu {
-                Picker("Show", selection: showBinding) {
-                    ForEach(Show.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Text(filterTitle).font(.system(size: 13))
-            }
-            .menuStyle(.button).buttonStyle(DenseCapsuleButtonStyle()).fixedSize()
-            .accessibilityLabel("Filter")
+            OnePlusLinearSelect(choices: Show.allCases.map { ($0, $0.rawValue) }, selection: showBinding,
+                                accessibilityLabel: "Filter", width: 150)
             DenseSearchField(prompt: "Search", text: $model.searchText, focusTrigger: searchFocus)
             scanButton
         }
@@ -229,7 +222,6 @@ struct NetToysDevicesView: View {
         })
     }
 
-    private var filterTitle: String { showBinding.wrappedValue.rawValue }
 
     @ViewBuilder private var scanButton: some View {
         if model.isScanning {

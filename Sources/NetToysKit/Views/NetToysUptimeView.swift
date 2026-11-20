@@ -1,4 +1,5 @@
 import NetToysCore
+import OnePlusUI
 import SwiftUI
 
 /// Uptime Monitor: counts on top, one row per check with its status and a sparkline. Checks are added,
@@ -270,8 +271,8 @@ struct NetToysUptimeEditor: View {
                 HStack {
                     Text("Type").font(.system(size: 13))
                     Spacer()
-                    Picker("Type", selection: $kind) { ForEach(Kind.allCases, id: \.self) { Text($0.rawValue) } }
-                        .labelsHidden().pickerStyle(.segmented).controlSize(.small).fixedSize()
+                    OnePlusLinearSegmented(choices: Kind.allCases.map { ($0, $0.rawValue) }, selection: $kind,
+                                           accessibilityLabel: "Type", sizing: .snug)
                 }
                 .padding(.horizontal, 10).frame(height: 32)
                 .overlay(alignment: .bottom) { DenseHairline().padding(.horizontal, 10) }
@@ -291,11 +292,9 @@ struct NetToysUptimeEditor: View {
                 HStack {
                     Text("Check every").font(.system(size: 13))
                     Spacer()
-                    Picker("Check every", selection: $interval) {
-                        Text("30 sec").tag(TimeInterval(30)); Text("1 min").tag(TimeInterval(60)); Text("5 min").tag(TimeInterval(300))
-                        Text("15 min").tag(TimeInterval(900)); Text("1 hour").tag(TimeInterval(3_600))
-                    }
-                    .labelsHidden().pickerStyle(.menu).controlSize(.small).fixedSize()
+                    OnePlusLinearSelect(choices: [(TimeInterval(30), "30 sec"), (60, "1 min"), (300, "5 min"),
+                                                  (900, "15 min"), (3_600, "1 hour")],
+                                        selection: $interval, accessibilityLabel: "Check every", width: 96)
                 }
                 .padding(.horizontal, 10).frame(height: 32)
                 .overlay(alignment: .bottom) { DenseHairline().padding(.horizontal, 10) }
@@ -303,9 +302,15 @@ struct NetToysUptimeEditor: View {
                 HStack {
                     Text("Down after").font(.system(size: 13))
                     Spacer()
-                    Text("\(failures) failed \(failures == 1 ? "check" : "checks") in a row").font(.system(size: 13))
-                        .foregroundStyle(Dense.secondary).monospacedDigit()
-                    Stepper("Down after", value: $failures, in: 1...10).labelsHidden().controlSize(.small)
+                    OnePlusLinearStepper("Down after", canDecrement: failures > 1, canIncrement: failures < 10,
+                                         decrement: { failures -= 1 }, increment: { failures += 1 }) {
+                        Text("\(failures) failed \(failures == 1 ? "check" : "checks") in a row").font(.system(size: 13))
+                            .foregroundStyle(Dense.secondary).monospacedDigit().fixedSize()
+                    }
+                    .fixedSize()
+                    .accessibilityElement(children: .ignore).accessibilityLabel("Down after")
+                    .accessibilityValue("\(failures) failed checks in a row")
+                    .accessibilityAdjustableAction { $0 == .increment ? (failures = min(failures + 1, 10)) : (failures = max(failures - 1, 1)) }
                 }
                 .padding(.horizontal, 10).frame(height: 32)
                 .overlay(alignment: .bottom) { DenseHairline().padding(.horizontal, 10) }

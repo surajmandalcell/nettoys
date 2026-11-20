@@ -2,6 +2,7 @@ import AppKit
 import Charts
 import CoreLocation
 import NetToysCore
+import OnePlusUI
 import SwiftUI
 
 // Network Monitor, Wi-Fi Analyzer, and Wi-Fi Signal. Each takes synthetic data for offscreen renders;
@@ -222,10 +223,8 @@ struct NetToysWiFiAnalyzerView: View {
                     HStack {
                         Text("Busy channels").font(.system(size: 12, weight: .semibold)).foregroundStyle(Dense.secondary)
                         Spacer()
-                        Picker("Band", selection: $band) {
-                            ForEach(NetToysWiFiBand.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                        }
-                        .labelsHidden().pickerStyle(.segmented).controlSize(.small).fixedSize()
+                        OnePlusLinearSegmented(choices: NetToysWiFiBand.allCases.map { ($0, $0.rawValue) }, selection: $band,
+                                               accessibilityLabel: "Band", sizing: .snug)
                     }
                     Chart(usage, id: \.channel) { item in
                         BarMark(x: .value("Channel", String(item.channel)), y: .value("Networks", item.overlapping))
