@@ -251,6 +251,7 @@ public final class NetToysPalettePanel {
             self?.hide()
             if picked { self?.openWindow?() }
         }
+        .onePlusFocusPolicy()
         .onePlusAppAppearance())
         hosting.sizingOptions = [.preferredContentSize]
         panel.contentView = hosting

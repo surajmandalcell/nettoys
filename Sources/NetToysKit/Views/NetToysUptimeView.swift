@@ -340,6 +340,7 @@ struct NetToysUptimeEditor: View {
         }
         .padding(20).frame(width: 460)
         .background(Dense.modal)
+        .onePlusFocusPolicy()
     }
 
     private var target: String { kind == .http ? url : host }

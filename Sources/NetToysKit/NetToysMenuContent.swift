@@ -137,6 +137,7 @@ public struct NetToysMenuContent: View {
                              }
                          })
             .background(NetToysKeyWindowReader { visible = $0 })
+            .onePlusFocusPolicy()
             .task(id: visible) {
                 while visible, !Task.isCancelled {
                     snapshot = await NetToysTraySnapshot.load(keeping: snapshot)
