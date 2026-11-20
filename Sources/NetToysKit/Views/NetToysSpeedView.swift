@@ -147,8 +147,7 @@ struct NetToysSpeedView: View {
                 Text("Run").font(.system(size: 13)).foregroundStyle(Dense.label)
                 Spacer()
                 if mode.wrappedValue == .daily {
-                    DatePicker("Time", selection: time, displayedComponents: .hourAndMinute)
-                        .labelsHidden().datePickerStyle(.field).controlSize(.small).fixedSize()
+                    OnePlusLinearDateField("Time", selection: time, showsDate: false)
                 }
                 OnePlusLinearSelect(choices: [(Repeat.off, "Off"), (.sixHours, "Every 6 hours"), (.daily, "Daily")],
                                     selection: mode, accessibilityLabel: "Run", width: 136)
