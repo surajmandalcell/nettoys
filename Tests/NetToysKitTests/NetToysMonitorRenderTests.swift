@@ -131,10 +131,15 @@ final class NetToysMonitorRenderTests: XCTestCase {
             ("wifi-analyzer-location", AnyView(NetToysWiFiAnalyzerView(tool: tool("wifi-analyzer"), scan: hiddenScan, band: .ghz2, location: .notDetermined)), false),
             ("wifi-signal", AnyView(NetToysWiFiSignalView(tool: tool("wifi-signal"), samples: signal, location: .authorizedAlways)), false),
             ("uptime-editor", AnyView(NetToysUptimeEditor(check: checks[1], isNew: false, save: { _ in }, delete: { _ in }, cancel: {})), false),
+            ("settings", AnyView(NetToysSettingsView(host: NetToysHost(id: .standalone, requestsPermissions: false,
+                                                                         defaults: UserDefaults(suiteName: "nettoys.render")!,
+                                                                         scannerDefaults: UserDefaults(suiteName: "nettoys.render")!),
+                                                     enabled: .constant(true)).padding(20)), true),
+            ("usage-sheet", AnyView(NetToysUsageSheet(request: (URL(string: "https://apps.mandalsuraj.com/v1/nettoys/latest?platform=macos&version=1.0.10&build=10&d=1&u=67113996")!, 67_113_996), close: {})), true),
         ]
         for (name, page, light) in pages {
             for dark in light ? [true, false] : [true] {
-                let framed = name == "uptime-editor" ? AnyView(page) : AnyView(page.frame(width: 1080, height: 760).background(Dense.content))
+                let framed = name == "uptime-editor" || name == "usage-sheet" ? AnyView(page) : AnyView(page.frame(width: 1080, height: 760).background(Dense.content))
                 try render(framed, dark: dark, to: "\(out)/\(name)-\(dark ? "dark" : "light").png")
             }
         }

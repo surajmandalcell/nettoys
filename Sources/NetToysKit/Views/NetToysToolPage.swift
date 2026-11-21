@@ -1,3 +1,4 @@
+import NetToysCore
 import SwiftUI
 
 /// The shared tool page: toolbar (title, input field, Run), a summary or diagram on top, the result table below.
@@ -34,8 +35,24 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
             guard id == tool.id, let shell, let run, hasInput else { return }
             shell.pendingRun = nil
             if running { run() } // stop the old host first
+            NetToysUsage.shared.record(feature, use: false) // the palette pick already counted the use
             run()
         }
+    }
+
+    private var feature: NetToysFeature {
+        switch tool.group {
+        case .diagnose: .diagnose
+        case .monitor: .monitor
+        case .localNetwork: .localNetwork
+        case .wifi: .wifi
+        }
+    }
+
+    /// Run or Stop; starting a run counts one use.
+    private func runOrStop() {
+        if !running { NetToysUsage.shared.record(feature) }
+        run?()
     }
 
     // Light to heavy: title, input field, Run.
@@ -51,7 +68,7 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
                 HStack(spacing: 6) {
                     Image(systemName: "scope").font(.system(size: 12, weight: .medium)).foregroundStyle(Dense.secondary)
                     TextField(prompt, text: $input).textFieldStyle(.plain).font(.system(size: 13))
-                        .onSubmit { if !running && hasInput { run?() } }
+                        .onSubmit { if !running && hasInput && run != nil { runOrStop() } }
                         .accessibilityLabel(prompt)
                 }
                 .padding(.horizontal, 10).frame(width: 300, height: 28)
@@ -59,7 +76,7 @@ struct NetToysToolPage<Summary: View, Results: View>: View {
             }
             if showsRun {
                 Button {
-                    run?()
+                    runOrStop()
                 } label: {
                     Label(running ? "Stop" : "Run", systemImage: running ? "stop.fill" : "play.fill")
                 }

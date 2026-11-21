@@ -457,6 +457,7 @@ final class NetToysScannerViewModel {
 
     func start(targets override: [IPv4Address]? = nil) {
         guard !isLoading, !isScanning, !isImporting else { return }
+        NetToysUsage.shared.record(.localNetwork)
         do {
             var defaultPorts = try PortList.parse(portInput)
             if customTextEnabled {

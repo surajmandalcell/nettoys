@@ -760,6 +760,37 @@ struct NetToysHistoryView: View {
     }
 }
 
+/// "See what's sent": the exact request the first check of a day sends, and its number in words.
+struct NetToysUsageSheet: View {
+    let request: (url: URL, number: Int)?
+    let close: () -> Void
+
+    var body: some View {
+        OnePlusSheet("What's sent", close: close) {
+            VStack(alignment: .leading, spacing: 12) {
+                if let request {
+                    Text("The first check of each day sends this for the day before. No install id; the server keeps no IP address.")
+                        .onePlusText(.row, color: OnePlusColor.secondary).fixedSize(horizontal: false, vertical: true)
+                    block(request.url.absoluteString)
+                    block(NetToysUsageState.json(request.number))
+                } else {
+                    Text("Nothing is sent while Share anonymous usage is off.").onePlusText(.row, color: OnePlusColor.secondary)
+                }
+            }
+        } footer: {
+            Button("Done", action: close).buttonStyle(OnePlusButtonStyle(.primary)).keyboardShortcut(.defaultAction)
+        }
+        .focusEffectDisabled()
+    }
+
+    private func block(_ text: String) -> some View {
+        Text(text).onePlusText(.mono).textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(OnePlusColor.field))
+    }
+}
+
 public struct NetToysSettingsView: View {
     private let host: NetToysHost
     @Binding private var enabled: Bool
@@ -768,6 +799,8 @@ public struct NetToysSettingsView: View {
     @State private var localNetworkAccess: NetToysLocalNetworkAccess
     @State private var confirmClear = false
     @AppStorage(NetToysPalettePanel.hotKeyDefaultsKey) private var globalPalette = true
+    @AppStorage(NetToysUsage.shareKey) private var shareUsage = true
+    @State private var showUsage = false
 
     public init(host: NetToysHost, enabled: Binding<Bool>, isTransitioning: Bool = false) {
         self.host = host
@@ -836,6 +869,19 @@ public struct NetToysSettingsView: View {
                 }
             }
             .buttonStyle(OnePlusButtonStyle(.neutral))
+            OnePlusCard {
+                OnePlusCardHeader("Anonymous usage")
+                OnePlusSettingRow("Share anonymous usage",
+                                  help: "Once a day, send how many times the app was used the day before and which parts.") {
+                    Toggle("Share anonymous usage", isOn: $shareUsage)
+                        .labelsHidden().toggleStyle(OnePlusSwitchStyle())
+                        .onChange(of: shareUsage) { if shareUsage { NetToysUsage.shared.checkIfDue() } }
+                }
+                OnePlusSettingRow("See what's sent", help: "The exact request and the numbers in it.", separator: false) {
+                    Button("Show") { showUsage = true }.fixedSize()
+                }
+            }
+            .buttonStyle(OnePlusButtonStyle(.neutral))
             OnePlusSettingRow("Network history", help: "Remove saved uptime, transition, and IP scan records from this Mac.", separator: false) {
                 Button("Clear History", role: .destructive) { confirmClear = true }
                     .buttonStyle(OnePlusButtonStyle(.destructive))
@@ -851,6 +897,7 @@ public struct NetToysSettingsView: View {
             Task { await model.refresh() }
             localNetworkAccess.request()
         }
+        .sheet(isPresented: $showUsage) { NetToysUsageSheet(request: NetToysUsage.shared.dailyRequest()) { showUsage = false } }
         .confirmationDialog("Clear network history?", isPresented: $confirmClear) {
             Button("Clear History", role: .destructive) { model.clear() }
             Button("Cancel", role: .cancel) {}

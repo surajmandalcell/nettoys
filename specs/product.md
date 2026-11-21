@@ -100,3 +100,9 @@ Renders: https://claude.ai/artifact/JtbRQVx3AjXGnEv93ZYrpK
   no overshoot, bounce, or bob.
 - All 29 tools use the same tool page: a summary or diagram on top, the
   result table below.
+
+## Anonymous usage (owner, 2026-11-21)
+
+- Once a day `GET /v1/nettoys/latest` sends `u` (app_backend `docs/clients.md`): uses of the day
+  before and a feature bitmask, slots in `NetToysFeature` (same order as the server's
+  `releases.json`). Settings: Share anonymous usage (on) and See what's sent. No updater.

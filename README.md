@@ -62,6 +62,18 @@ nettoys://open/settings
 Settings and history live in
 `~/Library/Application Support/MacPowerToys/NetToys`.
 
+## Privacy
+
+Once a day the app sends one request to `apps.mandalsuraj.com/v1/nettoys/latest`. It contains
+the app version and build, the platform (`macos`), whether this is the first check of the day
+and of the month, and one number for the day before: how many times you used the app (tool runs,
+palette picks, menu panel opens, and links, up to 1023) and which parts you used (Diagnose,
+Monitor, Local Network, and Wi-Fi tools, the command palette, the Option-Space palette, the menu
+panel, Raycast and links). It contains no account, no install id, and no host, address, or
+network name. The server keeps only daily totals for all users together and does not store your
+IP address. Turn it off with **Settings > Share anonymous usage**; then nothing is sent.
+**See what's sent** shows the exact request.
+
 ## Limits
 
 - Scanning and SSH Anchor support IPv4 only.

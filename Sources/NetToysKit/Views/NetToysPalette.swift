@@ -177,6 +177,7 @@ struct NetToysPaletteView: View {
 
     private func open(_ items: [NetToysPaletteItem]) {
         guard let item = items[safe: selected] else { return }
+        NetToysUsage.shared.record(.palette)
         if let deviceID = item.deviceID {
             shell.selection = "all-devices"
             shell.deviceRequest = deviceID
@@ -238,6 +239,7 @@ public final class NetToysPalettePanel {
 
     private func show() {
         guard let shell else { return }
+        NetToysUsage.shared.record(.globalPalette, use: false) // a pick in it counts the use
         let panel = NetToysKeyPanel(contentRect: .zero, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
         panel.isFloatingPanel = true
         panel.level = .floating

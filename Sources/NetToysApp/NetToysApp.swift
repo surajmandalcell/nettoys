@@ -37,6 +37,7 @@ struct NetToysApp: App {
             }
             .onOpenURL { url in
                 guard let route = NetToysRoute(url) else { return }
+                NetToysUsage.shared.record(.link)
                 if let toolID = route.toolID { return shell.open(toolID, input: route.input) }
                 if let destination = route.page { shell.selection = destination.selectionID }
                 prefill = route.prefill
@@ -92,6 +93,18 @@ final class NetToysAppDelegate: NSObject, NSApplicationDelegate {
         let event = NSAppleEventManager.shared().currentAppleEvent
         launchedAtLogin = event?.eventID == kAEOpenApplication
             && event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+
+    /// The daily anonymous usage report goes out on the first launch, wake, or midnight of a new day.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NetToysUsage.shared.checkIfDue()
+        let centers = [(NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification),
+                       (NotificationCenter.default, Notification.Name.NSCalendarDayChanged)]
+        for (center, name) in centers {
+            center.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { NetToysUsage.shared.checkIfDue() }
+            }
+        }
     }
 
     /// A Dock click or a second launch opens the window when none is visible.
